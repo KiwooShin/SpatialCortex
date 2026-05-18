@@ -452,7 +452,7 @@ async function loadData(url) {
 async function init() {
   // Try loading sample data
   try {
-    slamData = await loadData('data/sample.json');
+    slamData = await loadData('data/aria_vrs.json');
   } catch (e) {
     console.error('Failed to load sample data:', e);
     document.querySelector('.loading-text').textContent = 'Error loading data';
