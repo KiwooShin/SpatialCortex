@@ -4,9 +4,11 @@ __pycache__/
 .venv/
 venv/
 
-# Data (large files - use sample only)
+# Data (generated, too large for git)
 data/*.json
-!data/sample.json
+data/*.ply
+data/*.faiss
+data/*.sqlite
 
 # OS
 .DS_Store
@@ -17,7 +19,7 @@ Thumbs.db
 .idea/
 *.swp
 
-# Aria raw data (too large for git)
+# Raw sensor data
 *.vrs
 *.csv.gz
-!data/sample.json
+*.rrd
