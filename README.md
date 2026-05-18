@@ -1,188 +1,171 @@
-# SLAM AR Visualizer
+# SpatialCortex
 
-**Interactive 3D visualization of SLAM trajectories and point clouds in the browser.**
+**Spatial memory system for AR/VR — walk into a room, remember it forever, query it in natural language.**
 
-> Explore how AR/VR devices perceive and map the world — no install required.
-
-![Demo](docs/demo-placeholder.gif)
-
-🔗 **[Live Demo →](https://YOUR_USERNAME.github.io/slam-ar-visualizer/)**
+> Built on 3D Gaussian Splatting · Grounded-SAM 2 · CLIP · Gemma 3 27B · Three.js · Rerun.io
 
 ---
 
 ## What is this?
 
-An interactive web-based tool that visualizes the internal state of SLAM (Simultaneous Localization and Mapping) systems used in AR/VR devices. Load a SLAM session and explore:
+SpatialCortex gives AR/VR devices (or robots) persistent spatial memory. On first entry, it maps an environment and detects every object in 3D. Later, you can ask *"Where did I leave the hammer?"* in natural language and get an AR navigation path back to it — even after leaving and returning.
 
-- **6DoF camera trajectory** — the path the device traveled through space
-- **Semi-dense point cloud** — the 3D map the SLAM system built
-- **Camera frustum playback** — step through the session frame-by-frame to see what the device "saw" at each moment
-- **Keyframe highlighting** — see which frames the SLAM system selected as keyframes
+**Four-stage pipeline:**
 
-Built with [Three.js](https://threejs.org/) and deployable on GitHub Pages. Designed to work with data from **Meta Project Aria** (AR glasses), **TUM RGB-D**, and **EuRoC MAV** datasets.
+```
+[Entry]  VRS recording  →  SLAM trajectory + 3D Gaussian Splatting
+                        →  Grounded-SAM 2 object detection (2D → 3D)
+                        →  Scene graph: 3D bounding boxes + CLIP embeddings → FAISS
 
-## Why this project?
+[Query]  "Where is the chair?"
+                        →  CLIP retrieval → Gemma 3 27B visual confirmation
+                        →  Re-localization in stored map
+                        →  Dijkstra navigation path → AR overlay
+```
 
-SLAM is the core technology behind AR/VR spatial tracking — ARKit, ARCore, Meta Quest's Insight tracking all run SLAM internally. This visualizer makes the invisible visible: you can see exactly how a SLAM system builds its understanding of a 3D environment from camera and IMU data.
+---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────┐
-│  Browser (Three.js + WebGL)                     │
-│                                                 │
-│  ┌──────────┐  ┌──────────┐  ┌──────────────┐  │
-│  │PointCloud│  │Trajectory│  │Camera Frustum│  │
-│  │ Renderer │  │ Renderer │  │   Playback   │  │
-│  └────┬─────┘  └────┬─────┘  └──────┬───────┘  │
-│       └──────────────┼───────────────┘          │
-│                      │                          │
-│              ┌───────┴────────┐                 │
-│              │  Data Loader   │                 │
-│              │  (JSON / PLY)  │                 │
-│              └───────┬────────┘                 │
-└──────────────────────┼──────────────────────────┘
-                       │
-        ┌──────────────┼──────────────┐
-        │              │              │
-   Aria MPS CSV   TUM RGB-D    EuRoC MAV
-   (trajectory +  (groundtruth  (state_
-    pointcloud)    + ORB-SLAM)   groundtruth)
+┌─────────────────────────────────────────────────────────────────┐
+│  Input: Project Aria .vrs recording                             │
+└───────────────────────┬─────────────────────────────────────────┘
+                        │
+          ┌─────────────▼─────────────┐
+          │   SLAM + 3D Gaussian      │  projectaria_tools (VIO poses)
+          │   Splatting               │  gaussian-splatting (3DGS)
+          └─────────────┬─────────────┘
+                        │
+          ┌─────────────▼─────────────┐
+          │   Open-Vocab 3D Detection │  Grounded-SAM 2 (2D masks)
+          │                           │  Depth unprojection → 3D bbox
+          └─────────────┬─────────────┘
+                        │
+          ┌─────────────▼─────────────┐
+          │   Spatial Memory DB       │  SQLite (objects + poses)
+          │                           │  FAISS (CLIP ViT-L/14 vectors)
+          └──────┬──────────┬─────────┘
+                 │          │
+    ┌────────────▼──┐  ┌────▼────────────────┐
+    │  VLM Query    │  │  Navigation          │
+    │  Gemma 3 27B  │  │  Dijkstra on         │
+    │  (on-device)  │  │  waypoint graph      │
+    └────────────┬──┘  └────┬────────────────┘
+                 │          │
+          ┌──────▼──────────▼──────────┐
+          │   Visualization             │
+          │   Three.js (web map)        │
+          │   Rerun.io (real-time)      │
+          └─────────────────────────────┘
 ```
 
-## Supported Datasets
+---
 
-| Dataset | Source | Type | What you get |
-|---------|--------|------|-------------|
-| **Aria Everyday Activities** | Meta Project Aria glasses | AR glasses (egocentric) | 6DoF trajectory + semi-dense point cloud + eye gaze |
-| **TUM RGB-D** | Handheld RGB-D camera | Indoor | Ground truth trajectory + ORB-SLAM output |
-| **EuRoC MAV** | Drone (stereo + IMU) | Indoor flight | Ground truth + VINS-Mono/ORB-SLAM3 output |
+## Tech Stack
+
+| Component | Technology |
+|---|---|
+| Scene reconstruction | 3D Gaussian Splatting (Kerbl et al., ICCV 2023) |
+| Object detection | Grounded-SAM 2 (Meta AI, 2024) |
+| Semantic embeddings | CLIP ViT-L/14 + FAISS |
+| Spatial VLM | Gemma 3 27B multimodal (on-device, DGX Spark) |
+| Spatial database | SQLite + FAISS index |
+| Visualization | Three.js (interactive web map) + Rerun.io (real-time dashboard) |
+| Navigation | Dijkstra on SLAM waypoint graph |
+| Input data | Project Aria Gen 2 `.vrs` recordings |
+
+---
+
+## Current Status
+
+| Milestone | Status |
+|---|---|
+| SLAM trajectory + point cloud visualization (Three.js) | ✅ Done |
+| Aria VRS → JSON converter (`vrs_to_json.py`) | ✅ Done |
+| 3D Gaussian Splatting reconstruction | 🔲 In progress |
+| Grounded-SAM 2 → 3D object detection | 🔲 In progress |
+| CLIP + FAISS spatial memory DB | 🔲 Planned |
+| Gemma 3 27B spatial query pipeline | 🔲 Planned |
+| Re-localization + navigation | 🔲 Planned |
+| Three.js interactive map upgrade | 🔲 Planned |
+| Rerun.io real-time dashboard | 🔲 Planned |
+| End-to-end demo video | 🔲 Planned |
+
+---
 
 ## Quick Start
 
-### View the live demo
-Visit the [GitHub Pages demo](https://YOUR_USERNAME.github.io/slam-ar-visualizer/) — sample data is preloaded.
+### Visualize the SLAM viewer (current)
 
-### Run locally
 ```bash
-git clone https://github.com/YOUR_USERNAME/slam-ar-visualizer.git
-cd slam-ar-visualizer
-# Serve with any static server
-npx serve .
-# or
+git clone https://github.com/KiwooShin/SpatialCortex.git
+cd SpatialCortex
+
+# Generate data from a Project Aria .vrs file
+/path/to/miniconda3/envs/aria/bin/python3 scripts/vrs_to_json.py \
+  --vrs /path/to/recording.vrs \
+  --output data/aria_vrs.json
+
+# Serve locally
 python3 -m http.server 8000
+# Open http://localhost:8000
 ```
 
-### Use your own data
+### Environment setup (DGX Spark)
 
-#### From Aria MPS:
 ```bash
-# Convert Aria CSV to viewer JSON format
-python3 scripts/aria_to_json.py \
-  --trajectory path/to/closed_loop_trajectory.csv \
-  --points path/to/semidense_points.csv.gz \
-  --output data/my_session.json
+conda create -n spatialcortex python=3.10 -y
+conda activate spatialcortex
+pip install projectaria-tools torch torchvision
+pip install git+https://github.com/facebookresearch/segment-anything-2
+pip install open_clip_torch faiss-gpu rerun-sdk
 ```
 
-#### From TUM RGB-D:
-```bash
-python3 scripts/tum_to_json.py \
-  --groundtruth path/to/groundtruth.txt \
-  --pointcloud path/to/pointcloud.ply \
-  --output data/my_session.json
-```
+---
 
-## Controls
+## Viewer Controls
 
 | Input | Action |
-|-------|--------|
-| Left drag | Orbit camera |
+|---|---|
+| Left drag | Orbit |
 | Right drag | Pan |
 | Scroll | Zoom |
 | `Space` | Play / pause trajectory |
-| `←` `→` | Step through frames |
+| `←` `→` | Step frames |
 | `P` | Toggle point cloud |
-| `T` | Toggle trajectory line |
+| `T` | Toggle trajectory |
 | `F` | Toggle camera frustum |
-| `C` | Toggle point cloud coloring (height / confidence / uniform) |
+| `C` | Cycle color mode (height / confidence / uniform) |
 
-## Data Format
-
-The viewer consumes a single JSON file:
-
-```json
-{
-  "metadata": {
-    "dataset": "aria_aea",
-    "sequence": "loc1_script1_seq1",
-    "num_frames": 1200,
-    "num_points": 45000
-  },
-  "trajectory": [
-    {
-      "timestamp_ns": 1000000,
-      "position": [0.0, 0.0, 0.0],
-      "orientation": [1.0, 0.0, 0.0, 0.0],
-      "is_keyframe": true
-    }
-  ],
-  "point_cloud": [
-    {
-      "position": [1.2, 0.5, -3.1],
-      "confidence": 0.95
-    }
-  ]
-}
-```
+---
 
 ## Project Structure
 
 ```
-slam-ar-visualizer/
-├── index.html          # Main viewer (Three.js)
-├── src/
-│   ├── viewer.js       # Core 3D viewer
-│   ├── data-loader.js  # JSON/PLY loading
-│   ├── trajectory.js   # Trajectory rendering + playback
-│   ├── pointcloud.js   # Point cloud rendering
-│   └── controls.js     # UI controls + keyboard shortcuts
+SpatialCortex/
+├── index.html              # Three.js SLAM viewer
+├── plan.md                 # 2-week build plan
 ├── scripts/
-│   ├── aria_to_json.py # Convert Aria MPS CSV → viewer JSON
-│   └── tum_to_json.py  # Convert TUM RGB-D → viewer JSON
-├── data/
-│   └── sample.json     # Preloaded sample for demo
-└── docs/
-    └── demo.gif        # Demo recording
+│   └── vrs_to_json.py      # Aria .vrs → viewer JSON (VIO trajectory + point cloud)
+└── data/                   # gitignored — generated files go here
+    ├── aria_vrs.json        # extracted from .vrs
+    ├── scene_db.sqlite      # object detections + metadata
+    ├── scene.faiss          # CLIP embedding index
+    └── splat.ply            # 3DGS output
 ```
 
-## Roadmap
-
-- [x] Project setup + Three.js viewer skeleton
-- [ ] Point cloud rendering with height-based coloring
-- [ ] Trajectory line rendering with keyframe markers
-- [ ] Camera frustum playback (animated)
-- [ ] Aria MPS data converter
-- [ ] TUM RGB-D data converter
-- [ ] EuRoC data converter
-- [ ] Playback controls (play/pause/step)
-- [ ] Point cloud confidence-based filtering
-- [ ] GitHub Pages deployment
-- [ ] WebXR VR mode (explore in VR headset)
-- [ ] Multiple session overlay (compare trajectories)
-
-## Technical Notes
-
-**Why browser-based?** Existing SLAM visualization tools (rviz, Pangolin, Rerun) require local installation. A browser-based viewer lets anyone — including recruiters — see the result instantly.
-
-**Performance:** Three.js `BufferGeometry` with `Points` material handles 100K+ points at 60fps. For larger point clouds, octree-based LOD is planned.
-
-**Data privacy:** All processing happens client-side. No data is uploaded to any server.
+---
 
 ## References
 
-- [ORB-SLAM3](https://github.com/UZ-SLAMLab/ORB_SLAM3) — Visual-inertial SLAM
-- [Project Aria Tools](https://github.com/facebookresearch/projectaria_tools) — Aria data utilities
-- [Three.js](https://threejs.org/) — WebGL 3D library
+- [3D Gaussian Splatting](https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/) — Kerbl et al., ICCV 2023
+- [Grounded-SAM 2](https://github.com/IDEA-Research/Grounded-SAM-2) — IDEA Research / Meta AI
+- [Project Aria Tools](https://github.com/facebookresearch/projectaria_tools) — Meta Reality Labs
+- [Gemma 3](https://ai.google.dev/gemma) — Google DeepMind
+- [Rerun.io](https://rerun.io) — multimodal data visualization
+
+---
 
 ## License
 
