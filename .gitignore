@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Data (large files - use sample only)
+data/*.json
+!data/sample.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# Aria raw data (too large for git)
+*.vrs
+*.csv.gz
+!data/sample.json
