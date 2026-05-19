@@ -9,6 +9,8 @@ data/*.json
 data/*.ply
 data/*.faiss
 data/*.sqlite
+# Keyframes are tracked (small JPEGs for demo)
+# data/keyframes/ is intentionally NOT ignored
 
 # OS
 .DS_Store

@@ -97,6 +97,66 @@
     margin-bottom: 10px;
   }
 
+  /* ── Filmstrip ───────────────────────────────────────── */
+  .filmstrip-block {
+    padding: 14px 20px;
+    border-bottom: 1px solid rgba(100, 180, 255, 0.06);
+    flex-shrink: 0;
+  }
+
+  .filmstrip-block .section-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #2a3a5a;
+    margin-bottom: 10px;
+  }
+
+  #filmstrip {
+    display: flex;
+    gap: 5px;
+    overflow-x: auto;
+    padding-bottom: 4px;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(100,180,255,0.2) transparent;
+  }
+
+  #filmstrip img {
+    height: 64px;
+    width: auto;
+    border-radius: 4px;
+    border: 1px solid rgba(100,180,255,0.1);
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: border-color 0.15s, transform 0.15s;
+    object-fit: cover;
+  }
+
+  #filmstrip img:hover { border-color: rgba(100,180,255,0.5); transform: scale(1.05); }
+  #filmstrip img.active { border-color: #64b4ff; box-shadow: 0 0 8px rgba(100,180,255,0.4); }
+
+  /* ── Lightbox ────────────────────────────────────────── */
+  #lightbox {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.85);
+    z-index: 200;
+    justify-content: center;
+    align-items: center;
+    cursor: zoom-out;
+  }
+
+  #lightbox.open { display: flex; }
+
+  #lightbox img {
+    max-width: 90vw;
+    max-height: 90vh;
+    border-radius: 6px;
+    box-shadow: 0 0 60px rgba(0,0,0,0.8);
+  }
+
   #object-list {
     list-style: none;
     max-height: 140px;
@@ -420,6 +480,11 @@
     <div class="stat-row"><span class="label">Position </span><span class="value" id="stat-pos">—</span></div>
   </div>
 
+  <div class="filmstrip-block">
+    <div class="section-label">RGB Keyframes</div>
+    <div id="filmstrip"><span style="font-family:monospace;font-size:10px;color:#2a3a5a">Loading…</span></div>
+  </div>
+
   <div class="objects-block">
     <div class="section-label">Detected Objects</div>
     <ul id="object-list">
@@ -475,6 +540,9 @@
     <button id="btn-frustum" class="active">Frustum</button>
   </div>
 </div>
+
+<!-- Lightbox -->
+<div id="lightbox"><img id="lightbox-img" src="" alt="keyframe"></div>
 
 <script type="importmap">
 {
@@ -756,6 +824,38 @@ async function loadData(url) {
   return r.json();
 }
 
+// ── Filmstrip ─────────────────────────────────────────────────────────────────
+async function loadFilmstrip() {
+  const strip = document.getElementById('filmstrip');
+  const lb = document.getElementById('lightbox');
+  const lbImg = document.getElementById('lightbox-img');
+
+  try {
+    const manifest = await loadData('data/keyframes/manifest.json');
+    strip.innerHTML = '';
+    manifest.forEach((entry, i) => {
+      const img = document.createElement('img');
+      img.src = `data/keyframes/${entry.file}`;
+      img.title = `Frame ${entry.frame}`;
+      img.addEventListener('click', () => {
+        // Jump 3D viewer to nearest frame
+        const nearest = Math.round(entry.frame * (slamData?.trajectory?.length - 1 || 0) / 399);
+        setFrame(nearest);
+        document.querySelectorAll('#filmstrip img').forEach(el => el.classList.remove('active'));
+        img.classList.add('active');
+        // Open lightbox
+        lbImg.src = img.src;
+        lb.classList.add('open');
+      });
+      strip.appendChild(img);
+    });
+  } catch {
+    strip.innerHTML = '<span style="font-family:monospace;font-size:10px;color:#2a3a5a">Run extract_keyframes.py first</span>';
+  }
+
+  lb.addEventListener('click', () => lb.classList.remove('open'));
+}
+
 const loadingText = document.querySelector('.loading-text');
 const setStatus = (msg) => { loadingText.textContent = msg; };
 
@@ -796,6 +896,7 @@ async function init() {
     document.getElementById('frame-counter').textContent = `0 / ${slamData.trajectory.length}`;
 
     document.getElementById('loading').classList.add('hidden');
+    loadFilmstrip();
 
   } catch (e) {
     console.error('SpatialCortex init error:', e);
