@@ -3,33 +3,250 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>SLAM AR Visualizer</title>
+<title>SpatialCortex</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Outfit:wght@300;500;700&display=swap');
 
   * { margin: 0; padding: 0; box-sizing: border-box; }
 
   body {
-    background: #0a0a0f;
+    background: #07070e;
     color: #e0e0e8;
     font-family: 'Outfit', sans-serif;
     overflow: hidden;
     height: 100vh;
+    display: flex;
   }
 
-  #canvas-container {
-    position: fixed;
-    inset: 0;
-    z-index: 0;
+  /* ── Sidebar ────────────────────────────────────────── */
+  #sidebar {
+    width: 300px;
+    min-width: 300px;
+    height: 100vh;
+    background: rgba(10, 10, 18, 0.97);
+    border-right: 1px solid rgba(100, 180, 255, 0.1);
+    display: flex;
+    flex-direction: column;
+    z-index: 20;
+    flex-shrink: 0;
+  }
+
+  .sidebar-header {
+    padding: 20px 20px 14px;
+    border-bottom: 1px solid rgba(100, 180, 255, 0.08);
+  }
+
+  .sidebar-logo {
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: #fff;
+    text-shadow: 0 0 20px rgba(100, 180, 255, 0.4);
+  }
+
+  .sidebar-tagline {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: #3a4a6a;
+    margin-top: 4px;
+    letter-spacing: 0.05em;
+  }
+
+  /* ── Stats ──────────────────────────────────────────── */
+  .stats-block {
+    padding: 14px 20px;
+    border-bottom: 1px solid rgba(100, 180, 255, 0.06);
+  }
+
+  .stats-block .section-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #2a3a5a;
+    margin-bottom: 10px;
+  }
+
+  .stat-row {
+    display: flex;
+    justify-content: space-between;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    line-height: 1.9;
+  }
+
+  .stat-row .label { color: #4a5a7a; }
+  .stat-row .value { color: #a0b8e0; }
+  .stat-row .value.hi { color: #64b4ff; }
+  .stat-row .value.ok { color: #44ee88; }
+
+  /* ── Object list ─────────────────────────────────────── */
+  .objects-block {
+    padding: 14px 20px;
+    border-bottom: 1px solid rgba(100, 180, 255, 0.06);
+    flex-shrink: 0;
+  }
+
+  .objects-block .section-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #2a3a5a;
+    margin-bottom: 10px;
+  }
+
+  #object-list {
+    list-style: none;
+    max-height: 140px;
+    overflow-y: auto;
+  }
+
+  #object-list li {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: #7a9ac0;
+    padding: 4px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    transition: background 0.15s;
+  }
+
+  #object-list li:hover { background: rgba(100, 180, 255, 0.08); color: #c0d8f0; }
+  #object-list li.active { background: rgba(100, 180, 255, 0.15); color: #64b4ff; }
+
+  .obj-dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .obj-placeholder {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: #2a3a5a;
+    font-style: italic;
+    padding: 4px 8px;
+  }
+
+  /* ── Query panel ─────────────────────────────────────── */
+  .query-block {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 14px 20px;
+    min-height: 0;
+  }
+
+  .query-block .section-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #2a3a5a;
+    margin-bottom: 10px;
+    flex-shrink: 0;
+  }
+
+  #chat-log {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 12px;
+    min-height: 0;
+  }
+
+  .chat-msg {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    line-height: 1.5;
+    padding: 8px 10px;
+    border-radius: 6px;
+    max-width: 100%;
+    word-break: break-word;
+  }
+
+  .chat-msg.user {
+    background: rgba(100, 180, 255, 0.1);
+    border: 1px solid rgba(100, 180, 255, 0.15);
+    color: #a0c8f0;
+    align-self: flex-end;
+  }
+
+  .chat-msg.system {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    color: #5a7a9a;
+    align-self: flex-start;
+  }
+
+  .chat-msg.result {
+    background: rgba(68, 238, 136, 0.06);
+    border: 1px solid rgba(68, 238, 136, 0.15);
+    color: #44ee88;
+    align-self: flex-start;
+  }
+
+  .query-input-row {
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+
+  #query-input {
+    flex: 1;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(100, 180, 255, 0.2);
+    border-radius: 6px;
+    padding: 8px 12px;
+    color: #c0d8f0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+
+  #query-input:focus { border-color: rgba(100, 180, 255, 0.5); }
+  #query-input::placeholder { color: #2a3a5a; }
+
+  #query-submit {
+    background: rgba(100, 180, 255, 0.12);
+    border: 1px solid rgba(100, 180, 255, 0.25);
+    color: #64b4ff;
+    border-radius: 6px;
+    padding: 8px 14px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.15s;
+    white-space: nowrap;
+  }
+
+  #query-submit:hover {
+    background: rgba(100, 180, 255, 0.22);
+    border-color: rgba(100, 180, 255, 0.5);
+  }
+
+  /* ── 3D Canvas area ──────────────────────────────────── */
+  #viewport {
+    flex: 1;
+    position: relative;
+    min-width: 0;
   }
 
   canvas { display: block; }
 
-  /* HUD overlay */
+  /* ── Top HUD ─────────────────────────────────────────── */
   #hud {
-    position: fixed;
+    position: absolute;
     top: 0; left: 0; right: 0;
-    padding: 20px 28px;
+    padding: 16px 20px;
     display: flex;
     justify-content: space-between;
     align-items: flex-start;
@@ -39,127 +256,94 @@
 
   #hud > * { pointer-events: auto; }
 
-  .hud-title {
-    font-size: 15px;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: #ffffff;
-    text-shadow: 0 0 20px rgba(100, 180, 255, 0.3);
-  }
-
-  .hud-subtitle {
+  .hud-dataset {
     font-family: 'JetBrains Mono', monospace;
     font-size: 11px;
-    color: #6a7090;
-    margin-top: 4px;
+    color: #3a5a7a;
   }
 
-  /* Stats panel */
-  .stats-panel {
-    background: rgba(12, 12, 20, 0.85);
-    backdrop-filter: blur(12px);
-    border: 1px solid rgba(100, 180, 255, 0.12);
-    border-radius: 10px;
-    padding: 14px 18px;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 11px;
-    line-height: 1.8;
-    min-width: 200px;
-  }
-
-  .stats-panel .label { color: #5a6080; }
-  .stats-panel .value { color: #a0b8e0; }
-  .stats-panel .value.highlight { color: #64b4ff; }
-
-  /* Playback bar */
+  /* ── Playback bar ────────────────────────────────────── */
   #playback {
-    position: fixed;
+    position: absolute;
     bottom: 0; left: 0; right: 0;
-    padding: 16px 28px 24px;
-    background: linear-gradient(transparent, rgba(10, 10, 15, 0.95));
+    padding: 14px 20px 20px;
+    background: linear-gradient(transparent, rgba(7, 7, 14, 0.95));
     z-index: 10;
     display: flex;
     align-items: center;
-    gap: 16px;
+    gap: 12px;
   }
 
   #playback button {
-    background: rgba(100, 180, 255, 0.12);
-    border: 1px solid rgba(100, 180, 255, 0.25);
+    background: rgba(100, 180, 255, 0.1);
+    border: 1px solid rgba(100, 180, 255, 0.22);
     color: #64b4ff;
-    border-radius: 6px;
-    padding: 6px 14px;
+    border-radius: 5px;
+    padding: 5px 12px;
     font-family: 'JetBrains Mono', monospace;
-    font-size: 12px;
+    font-size: 11px;
     cursor: pointer;
     transition: all 0.15s;
+    white-space: nowrap;
   }
 
-  #playback button:hover {
-    background: rgba(100, 180, 255, 0.22);
-    border-color: rgba(100, 180, 255, 0.5);
-  }
-
-  #playback button.active {
-    background: rgba(100, 180, 255, 0.3);
-    color: #fff;
-  }
+  #playback button:hover { background: rgba(100, 180, 255, 0.2); }
+  #playback button.active { background: rgba(100, 180, 255, 0.28); color: #fff; }
 
   #timeline {
     flex: 1;
     -webkit-appearance: none;
-    height: 4px;
+    height: 3px;
     border-radius: 2px;
-    background: rgba(100, 180, 255, 0.15);
+    background: rgba(100, 180, 255, 0.12);
     outline: none;
   }
 
   #timeline::-webkit-slider-thumb {
     -webkit-appearance: none;
-    width: 14px; height: 14px;
+    width: 13px; height: 13px;
     border-radius: 50%;
     background: #64b4ff;
     cursor: pointer;
-    box-shadow: 0 0 10px rgba(100, 180, 255, 0.5);
+    box-shadow: 0 0 8px rgba(100, 180, 255, 0.6);
   }
 
   #frame-counter {
     font-family: 'JetBrains Mono', monospace;
-    font-size: 11px;
-    color: #6a7090;
-    min-width: 90px;
+    font-size: 10px;
+    color: #3a5070;
+    min-width: 80px;
     text-align: right;
   }
 
-  /* Keyboard hint */
+  /* ── Keyboard hints ──────────────────────────────────── */
   #keyhints {
-    position: fixed;
-    bottom: 80px;
-    right: 28px;
+    position: absolute;
+    bottom: 70px; right: 20px;
     font-family: 'JetBrains Mono', monospace;
     font-size: 10px;
-    color: #3a4060;
+    color: #2a3a5a;
     text-align: right;
-    line-height: 1.8;
+    line-height: 1.9;
     z-index: 10;
+    pointer-events: none;
   }
 
   kbd {
     display: inline-block;
-    background: rgba(100, 180, 255, 0.08);
-    border: 1px solid rgba(100, 180, 255, 0.15);
+    background: rgba(100, 180, 255, 0.06);
+    border: 1px solid rgba(100, 180, 255, 0.12);
     border-radius: 3px;
     padding: 1px 5px;
     font-size: 10px;
-    color: #5a6888;
+    color: #3a5070;
   }
 
-  /* Loading screen */
+  /* ── Loading ─────────────────────────────────────────── */
   #loading {
     position: fixed;
     inset: 0;
-    background: #0a0a0f;
+    background: #07070e;
     display: flex;
     flex-direction: column;
     justify-content: center;
@@ -171,8 +355,8 @@
   #loading.hidden { opacity: 0; pointer-events: none; }
 
   .loading-spinner {
-    width: 32px; height: 32px;
-    border: 2px solid rgba(100, 180, 255, 0.15);
+    width: 28px; height: 28px;
+    border: 2px solid rgba(100, 180, 255, 0.12);
     border-top-color: #64b4ff;
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
@@ -181,10 +365,33 @@
   @keyframes spin { to { transform: rotate(360deg); } }
 
   .loading-text {
-    margin-top: 16px;
+    margin-top: 14px;
     font-family: 'JetBrains Mono', monospace;
-    font-size: 12px;
-    color: #5a6888;
+    font-size: 11px;
+    color: #3a5070;
+  }
+
+  /* ── Object label overlays ───────────────────────────── */
+  .obj-label {
+    position: absolute;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: #44ee88;
+    background: rgba(0, 20, 10, 0.75);
+    border: 1px solid rgba(68, 238, 136, 0.3);
+    border-radius: 3px;
+    padding: 2px 6px;
+    pointer-events: none;
+    white-space: nowrap;
+    transform: translate(-50%, -100%);
+    margin-top: -6px;
+  }
+
+  #label-layer {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 5;
   }
 </style>
 </head>
@@ -193,45 +400,81 @@
 <!-- Loading -->
 <div id="loading">
   <div class="loading-spinner"></div>
-  <div class="loading-text">Loading SLAM data…</div>
+  <div class="loading-text">Loading SpatialCortex…</div>
 </div>
 
-<!-- HUD -->
-<div id="hud">
-  <div>
-    <div class="hud-title">SLAM AR Visualizer</div>
-    <div class="hud-subtitle" id="dataset-name">Loading…</div>
+<!-- Sidebar -->
+<div id="sidebar">
+  <div class="sidebar-header">
+    <div class="sidebar-logo">SpatialCortex</div>
+    <div class="sidebar-tagline">Spatial Memory · VLM Navigation</div>
   </div>
-  <div class="stats-panel">
-    <div><span class="label">Points  </span><span class="value" id="stat-points">—</span></div>
-    <div><span class="label">Frames  </span><span class="value" id="stat-frames">—</span></div>
-    <div><span class="label">Keyframes </span><span class="value highlight" id="stat-kf">—</span></div>
-    <div><span class="label">Position </span><span class="value" id="stat-pos">—</span></div>
+
+  <div class="stats-block">
+    <div class="section-label">Scene Stats</div>
+    <div class="stat-row"><span class="label">Dataset  </span><span class="value hi" id="stat-dataset">—</span></div>
+    <div class="stat-row"><span class="label">Points   </span><span class="value" id="stat-points">—</span></div>
+    <div class="stat-row"><span class="label">Frames   </span><span class="value" id="stat-frames">—</span></div>
+    <div class="stat-row"><span class="label">Keyframes</span><span class="value hi" id="stat-kf">—</span></div>
+    <div class="stat-row"><span class="label">Objects  </span><span class="value ok" id="stat-objects">0</span></div>
+    <div class="stat-row"><span class="label">Position </span><span class="value" id="stat-pos">—</span></div>
+  </div>
+
+  <div class="objects-block">
+    <div class="section-label">Detected Objects</div>
+    <ul id="object-list">
+      <li class="obj-placeholder">Run Phase 2 to detect objects</li>
+    </ul>
+  </div>
+
+  <div class="query-block">
+    <div class="section-label">Spatial Query — VLM</div>
+    <div id="chat-log">
+      <div class="chat-msg system">Ask where any object is. Gemma 3 will locate it in the scene.</div>
+    </div>
+    <div class="query-input-row">
+      <input type="text" id="query-input" placeholder="Where is the chair?" />
+      <button id="query-submit">Ask</button>
+    </div>
   </div>
 </div>
 
-<!-- Keyboard hints -->
-<div id="keyhints">
-  <kbd>Space</kbd> play/pause &nbsp;
-  <kbd>←</kbd><kbd>→</kbd> step &nbsp;
-  <kbd>P</kbd> points &nbsp;
-  <kbd>T</kbd> trajectory &nbsp;
-  <kbd>F</kbd> frustum &nbsp;
-  <kbd>C</kbd> color mode
-</div>
+<!-- 3D Viewport -->
+<div id="viewport">
+  <canvas id="canvas"></canvas>
 
-<!-- Playback -->
-<div id="playback">
-  <button id="btn-play">▶ Play</button>
-  <input type="range" id="timeline" min="0" max="1" step="1" value="0">
-  <span id="frame-counter">0 / 0</span>
-  <button id="btn-points" class="active">Points</button>
-  <button id="btn-traj" class="active">Trajectory</button>
-  <button id="btn-frustum" class="active">Frustum</button>
-</div>
+  <!-- Object label overlays -->
+  <div id="label-layer"></div>
 
-<!-- Three.js container -->
-<div id="canvas-container"></div>
+  <!-- Top HUD -->
+  <div id="hud">
+    <div></div>
+    <div class="hud-dataset" id="hud-sequence">—</div>
+  </div>
+
+  <!-- Keyboard hints -->
+  <div id="keyhints">
+    <kbd>Space</kbd> play &nbsp;
+    <kbd>←</kbd><kbd>→</kbd> step &nbsp;
+    <kbd>P</kbd> points &nbsp;
+    <kbd>T</kbd> traj &nbsp;
+    <kbd>B</kbd> boxes &nbsp;
+    <kbd>N</kbd> nav path &nbsp;
+    <kbd>C</kbd> color
+  </div>
+
+  <!-- Playback bar -->
+  <div id="playback">
+    <button id="btn-play">▶ Play</button>
+    <input type="range" id="timeline" min="0" max="1" step="1" value="0">
+    <span id="frame-counter">0 / 0</span>
+    <button id="btn-points" class="active">Points</button>
+    <button id="btn-traj" class="active">Trajectory</button>
+    <button id="btn-boxes" class="active">Boxes</button>
+    <button id="btn-navpath">Nav Path</button>
+    <button id="btn-frustum" class="active">Frustum</button>
+  </div>
+</div>
 
 <script type="importmap">
 {
@@ -244,359 +487,436 @@
 <script type="module">
 import * as THREE from 'three';
 
-// ─── Inline OrbitControls (minimal) ────────────────────────────
-// We load OrbitControls via a dynamic import from CDN
 const OrbitControlsModule = await import('https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js');
 const OrbitControls = OrbitControlsModule.OrbitControls;
 
-// ─── Scene setup ───────────────────────────────────────────────
-const container = document.getElementById('canvas-container');
-const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
-renderer.setSize(window.innerWidth, window.innerHeight);
+// ── Scene setup ───────────────────────────────────────────────────────────────
+const viewport = document.getElementById('viewport');
+const canvas = document.getElementById('canvas');
+
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-renderer.setClearColor(0x0a0a0f);
-container.appendChild(renderer.domElement);
+renderer.setClearColor(0x07070e);
 
 const scene = new THREE.Scene();
-scene.fog = new THREE.FogExp2(0x0a0a0f, 0.04);
+scene.fog = new THREE.FogExp2(0x07070e, 0.035);
 
-const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.05, 200);
+const camera = new THREE.PerspectiveCamera(60, 1, 0.05, 200);
 camera.position.set(5, 4, 5);
 camera.lookAt(0, 0, 0);
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
-controls.dampingFactor = 0.08;
+controls.dampingFactor = 0.07;
 controls.zoomSpeed = 0.8;
 
-// ─── Lights & grid ────────────────────────────────────────────
-const ambientLight = new THREE.AmbientLight(0x404060, 0.5);
-scene.add(ambientLight);
+function resizeRenderer() {
+  const w = viewport.clientWidth, h = viewport.clientHeight;
+  renderer.setSize(w, h);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+resizeRenderer();
+window.addEventListener('resize', resizeRenderer);
 
-// Ground grid
-const gridHelper = new THREE.GridHelper(20, 40, 0x1a1a2e, 0x12121f);
-gridHelper.material.transparent = true;
-gridHelper.material.opacity = 0.4;
-scene.add(gridHelper);
+// Grid
+const grid = new THREE.GridHelper(30, 60, 0x141428, 0x0e0e20);
+grid.material.transparent = true;
+grid.material.opacity = 0.35;
+scene.add(grid);
+scene.add(new THREE.AxesHelper(0.4));
 
-// Axis indicator (small, at origin)
-const axisHelper = new THREE.AxesHelper(0.5);
-scene.add(axisHelper);
-
-// ─── Data containers ──────────────────────────────────────────
+// ── State ─────────────────────────────────────────────────────────────────────
 let slamData = null;
-let pointCloudObj = null;
-let trajectoryLine = null;
-let keyframeMarkers = null;
+let pointCloudObj = null, trajectoryLine = null, keyframeMarkers = null;
 let frustumObj = null;
+let bboxGroup = new THREE.Group();   // 3D bounding boxes
+let navPathObj = null;               // navigation path line
+let labelLayer = document.getElementById('label-layer');
 
-let currentFrame = 0;
-let isPlaying = false;
-let playSpeed = 1;
-let showPoints = true;
-let showTrajectory = true;
-let showFrustum = true;
-let colorMode = 0; // 0=height, 1=confidence, 2=uniform
+scene.add(bboxGroup);
 
-// ─── Point cloud builder ──────────────────────────────────────
+let currentFrame = 0, isPlaying = false;
+let showPoints = true, showTrajectory = true, showFrustum = true;
+let showBoxes = true, showNavPath = false;
+let colorMode = 0;
+
+const OBJECT_COLORS = [
+  0x44ee88, 0x64b4ff, 0xffaa44, 0xff6688,
+  0xaa88ff, 0x44ddcc, 0xffdd44, 0xff8844,
+];
+
+// ── Point cloud ───────────────────────────────────────────────────────────────
 function buildPointCloud(points) {
-  const count = points.length;
-  const positions = new Float32Array(count * 3);
-  const colors = new Float32Array(count * 3);
-  const confidences = new Float32Array(count);
+  const n = points.length;
+  const pos = new Float32Array(n * 3);
+  const col = new Float32Array(n * 3);
+  const conf = new Float32Array(n);
 
-  // Find Y bounds for height coloring
   let minY = Infinity, maxY = -Infinity;
-  for (let i = 0; i < count; i++) {
-    const y = points[i].position[1];
-    if (y < minY) minY = y;
-    if (y > maxY) maxY = y;
-  }
-  const rangeY = maxY - minY || 1;
+  for (const p of points) { if (p.position[1] < minY) minY = p.position[1]; if (p.position[1] > maxY) maxY = p.position[1]; }
+  const ry = maxY - minY || 1;
 
-  for (let i = 0; i < count; i++) {
+  for (let i = 0; i < n; i++) {
     const p = points[i];
-    positions[i * 3] = p.position[0];
-    positions[i * 3 + 1] = p.position[1];
-    positions[i * 3 + 2] = p.position[2];
-    confidences[i] = p.confidence || 0.5;
-
-    // Height-based color (blue low → cyan mid → white high)
-    const t = (p.position[1] - minY) / rangeY;
-    colors[i * 3] = 0.2 + t * 0.6;
-    colors[i * 3 + 1] = 0.4 + t * 0.5;
-    colors[i * 3 + 2] = 0.9;
+    pos[i*3] = p.position[0]; pos[i*3+1] = p.position[1]; pos[i*3+2] = p.position[2];
+    conf[i] = p.confidence ?? 0.5;
+    const t = (p.position[1] - minY) / ry;
+    col[i*3] = 0.2 + t*0.6; col[i*3+1] = 0.4 + t*0.5; col[i*3+2] = 0.9;
   }
 
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-  geometry.setAttribute('confidence', new THREE.BufferAttribute(confidences, 1));
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('color',    new THREE.BufferAttribute(col, 3));
+  geo.setAttribute('confidence', new THREE.BufferAttribute(conf, 1));
 
-  const material = new THREE.PointsMaterial({
-    size: 0.025,
-    vertexColors: true,
-    transparent: true,
-    opacity: 0.85,
-    sizeAttenuation: true,
-    depthWrite: false,
-  });
-
-  return new THREE.Points(geometry, material);
+  return new THREE.Points(geo, new THREE.PointsMaterial({
+    size: 0.025, vertexColors: true, transparent: true,
+    opacity: 0.8, sizeAttenuation: true, depthWrite: false,
+  }));
 }
 
-function applyColorMode(points, mode) {
+function applyColorMode(mode) {
   if (!pointCloudObj) return;
-  const colors = pointCloudObj.geometry.attributes.color;
-  const positions = pointCloudObj.geometry.attributes.position;
-  const confs = pointCloudObj.geometry.attributes.confidence;
-  const count = positions.count;
-
+  const col = pointCloudObj.geometry.attributes.color;
+  const pos = pointCloudObj.geometry.attributes.position;
+  const cnf = pointCloudObj.geometry.attributes.confidence;
+  const n = pos.count;
   let minY = Infinity, maxY = -Infinity;
-  for (let i = 0; i < count; i++) {
-    const y = positions.getY(i);
-    if (y < minY) minY = y;
-    if (y > maxY) maxY = y;
-  }
-  const rangeY = maxY - minY || 1;
-
-  for (let i = 0; i < count; i++) {
+  for (let i = 0; i < n; i++) { const y = pos.getY(i); if (y < minY) minY = y; if (y > maxY) maxY = y; }
+  const ry = maxY - minY || 1;
+  for (let i = 0; i < n; i++) {
     if (mode === 0) {
-      // Height
-      const t = (positions.getY(i) - minY) / rangeY;
-      colors.setXYZ(i, 0.2 + t * 0.6, 0.4 + t * 0.5, 0.9);
+      const t = (pos.getY(i) - minY) / ry;
+      col.setXYZ(i, 0.2+t*0.6, 0.4+t*0.5, 0.9);
     } else if (mode === 1) {
-      // Confidence (red=low, green=high)
-      const c = confs.getX(i);
-      colors.setXYZ(i, 1 - c, c, 0.3);
+      const c = cnf.getX(i);
+      col.setXYZ(i, 1-c, c, 0.3);
     } else {
-      // Uniform cyan
-      colors.setXYZ(i, 0.39, 0.71, 1.0);
+      col.setXYZ(i, 0.39, 0.71, 1.0);
     }
   }
-  colors.needsUpdate = true;
+  col.needsUpdate = true;
 }
 
-// ─── Trajectory builder ───────────────────────────────────────
+// ── Trajectory ────────────────────────────────────────────────────────────────
 function buildTrajectory(trajectory) {
-  const points = trajectory.map(f => new THREE.Vector3(f.position[0], f.position[1], f.position[2]));
-
-  // Trajectory line
-  const lineGeom = new THREE.BufferGeometry().setFromPoints(points);
-  const lineMat = new THREE.LineBasicMaterial({
-    color: 0x64b4ff,
-    transparent: true,
-    opacity: 0.6,
-    linewidth: 1,
-  });
-  const line = new THREE.Line(lineGeom, lineMat);
-
-  // Keyframe markers
-  const kfPositions = [];
-  for (const f of trajectory) {
-    if (f.is_keyframe) {
-      kfPositions.push(f.position[0], f.position[1], f.position[2]);
-    }
-  }
-  const kfGeom = new THREE.BufferGeometry();
-  kfGeom.setAttribute('position', new THREE.Float32BufferAttribute(kfPositions, 3));
-  const kfMat = new THREE.PointsMaterial({
-    size: 0.06,
-    color: 0xffaa44,
-    transparent: true,
-    opacity: 0.9,
-    sizeAttenuation: true,
-  });
-  const kfPoints = new THREE.Points(kfGeom, kfMat);
-
-  return { line, keyframes: kfPoints };
+  const pts = trajectory.map(f => new THREE.Vector3(...f.position));
+  const line = new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints(pts),
+    new THREE.LineBasicMaterial({ color: 0x2264a0, transparent: true, opacity: 0.5 })
+  );
+  const kfPos = trajectory.filter(f => f.is_keyframe).flatMap(f => f.position);
+  const kfGeo = new THREE.BufferGeometry();
+  kfGeo.setAttribute('position', new THREE.Float32BufferAttribute(kfPos, 3));
+  const kfPts = new THREE.Points(kfGeo, new THREE.PointsMaterial({
+    size: 0.055, color: 0xffaa44, transparent: true, opacity: 0.85, sizeAttenuation: true,
+  }));
+  return { line, keyframes: kfPts };
 }
 
-// ─── Camera frustum builder ───────────────────────────────────
+// ── Camera frustum ────────────────────────────────────────────────────────────
 function buildFrustum() {
-  const w = 0.15, h = 0.1, d = 0.25;
-  const vertices = new Float32Array([
-    // Pyramid edges from tip to base corners
-    0, 0, 0, -w, -h, -d,
-    0, 0, 0,  w, -h, -d,
-    0, 0, 0,  w,  h, -d,
-    0, 0, 0, -w,  h, -d,
-    // Base rectangle
-    -w, -h, -d,  w, -h, -d,
-     w, -h, -d,  w,  h, -d,
-     w,  h, -d, -w,  h, -d,
-    -w,  h, -d, -w, -h, -d,
+  const w = 0.14, h = 0.09, d = 0.22;
+  const v = new Float32Array([
+    0,0,0, -w,-h,-d,  0,0,0,  w,-h,-d,  0,0,0,  w, h,-d,  0,0,0, -w, h,-d,
+    -w,-h,-d, w,-h,-d,  w,-h,-d, w, h,-d,  w, h,-d,-w, h,-d, -w, h,-d,-w,-h,-d,
   ]);
-  const geom = new THREE.BufferGeometry();
-  geom.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
-  const mat = new THREE.LineBasicMaterial({ color: 0x44ff88, transparent: true, opacity: 0.8 });
-  return new THREE.LineSegments(geom, mat);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(v, 3));
+  return new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: 0x44ee88, transparent: true, opacity: 0.85 }));
 }
 
-function updateFrustum(frameIdx) {
+function updateFrustum(idx) {
   if (!frustumObj || !slamData) return;
-  const frame = slamData.trajectory[frameIdx];
-  if (!frame) return;
-
-  frustumObj.position.set(frame.position[0], frame.position[1], frame.position[2]);
-  const q = frame.orientation;
-  frustumObj.quaternion.set(q[1], q[2], q[3], q[0]); // Three.js: (x,y,z,w)
+  const f = slamData.trajectory[idx];
+  if (!f) return;
+  frustumObj.position.set(...f.position);
+  const q = f.orientation;
+  frustumObj.quaternion.set(q[1], q[2], q[3], q[0]);
 }
 
-// ─── Load data ────────────────────────────────────────────────
+// ── 3D Bounding Boxes ─────────────────────────────────────────────────────────
+function buildBoundingBoxes(objects) {
+  bboxGroup.clear();
+  labelLayer.innerHTML = '';
+  if (!objects || objects.length === 0) return;
+
+  objects.forEach((obj, i) => {
+    const color = OBJECT_COLORS[i % OBJECT_COLORS.length];
+    const [cx, cy, cz] = obj.position;
+    const [sx, sy, sz] = obj.size ?? [0.3, 0.3, 0.3];
+
+    // Wireframe box
+    const geo = new THREE.BoxGeometry(sx, sy, sz);
+    const edges = new THREE.EdgesGeometry(geo);
+    const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.8 });
+    const box = new THREE.LineSegments(edges, mat);
+    box.position.set(cx, cy, cz);
+    box.userData = { objectIndex: i, label: obj.label };
+    bboxGroup.add(box);
+  });
+
+  document.getElementById('stat-objects').textContent = objects.length;
+  populateObjectList(objects);
+}
+
+function updateObjectLabels() {
+  if (!slamData?.objects) return;
+  const w = viewport.clientWidth, h = viewport.clientHeight;
+  const existing = labelLayer.querySelectorAll('.obj-label');
+  let idx = 0;
+  bboxGroup.children.forEach((box) => {
+    const worldPos = box.position.clone();
+    const ndc = worldPos.project(camera);
+    const x = (ndc.x * 0.5 + 0.5) * w;
+    const y = (1 - (ndc.y * 0.5 + 0.5)) * h;
+    if (ndc.z < 1 && x > 0 && x < w && y > 0 && y < h) {
+      let el = existing[idx];
+      if (!el) {
+        el = document.createElement('div');
+        el.className = 'obj-label';
+        labelLayer.appendChild(el);
+      }
+      el.textContent = box.userData.label ?? '?';
+      el.style.left = x + 'px';
+      el.style.top = y + 'px';
+      el.style.display = 'block';
+      idx++;
+    }
+  });
+  // Hide unused labels
+  for (let j = idx; j < existing.length; j++) existing[j].style.display = 'none';
+}
+
+// ── Navigation Path ───────────────────────────────────────────────────────────
+function buildNavPath(waypoints) {
+  if (navPathObj) { scene.remove(navPathObj); navPathObj = null; }
+  if (!waypoints || waypoints.length < 2) return;
+
+  const pts = waypoints.map(p => new THREE.Vector3(...p));
+  const geo = new THREE.BufferGeometry().setFromPoints(pts);
+
+  // Dashed line
+  const mat = new THREE.LineDashedMaterial({
+    color: 0xffdd44, dashSize: 0.18, gapSize: 0.08,
+    transparent: true, opacity: 0.9,
+  });
+  navPathObj = new THREE.Line(geo, mat);
+  navPathObj.computeLineDistances();
+  navPathObj.visible = showNavPath;
+  scene.add(navPathObj);
+
+  // Arrow at destination
+  const dest = pts[pts.length - 1];
+  const arrowDir = new THREE.Vector3(0, 1, 0);
+  const arrow = new THREE.ArrowHelper(arrowDir, dest, 0.4, 0xffdd44, 0.15, 0.1);
+  arrow.line.material.transparent = true; arrow.line.material.opacity = 0.9;
+  navPathObj.add(arrow);
+}
+
+// ── Object list sidebar ───────────────────────────────────────────────────────
+function populateObjectList(objects) {
+  const ul = document.getElementById('object-list');
+  ul.innerHTML = '';
+  objects.forEach((obj, i) => {
+    const color = '#' + OBJECT_COLORS[i % OBJECT_COLORS.length].toString(16).padStart(6, '0');
+    const li = document.createElement('li');
+    li.innerHTML = `<span class="obj-dot" style="background:${color}"></span>${obj.label}`;
+    li.addEventListener('click', () => {
+      document.querySelectorAll('#object-list li').forEach(el => el.classList.remove('active'));
+      li.classList.add('active');
+      // Focus camera on object
+      const [cx, cy, cz] = obj.position;
+      controls.target.set(cx, cy, cz);
+      highlightObject(i);
+    });
+    ul.appendChild(li);
+  });
+}
+
+function highlightObject(idx) {
+  bboxGroup.children.forEach((box, i) => {
+    box.material.opacity = i === idx ? 1.0 : 0.35;
+    box.material.color.setHex(i === idx ? 0xffffff : OBJECT_COLORS[i % OBJECT_COLORS.length]);
+  });
+  // Build nav path from current device position to object
+  if (slamData?.trajectory?.length > 0 && slamData.objects?.[idx]) {
+    const cur = slamData.trajectory[currentFrame].position;
+    const dst = slamData.objects[idx].position;
+    buildNavPath([cur, dst]);
+    showNavPath = true;
+    if (navPathObj) navPathObj.visible = true;
+    document.getElementById('btn-navpath').classList.add('active');
+  }
+}
+
+// ── Load data ─────────────────────────────────────────────────────────────────
 async function loadData(url) {
-  const resp = await fetch(url);
-  return resp.json();
+  const r = await fetch(url);
+  return r.json();
 }
 
 async function init() {
-  // Try loading sample data
   try {
     slamData = await loadData('data/aria_vrs.json');
   } catch (e) {
-    console.error('Failed to load sample data:', e);
     document.querySelector('.loading-text').textContent = 'Error loading data';
     return;
   }
 
-  // Build scene objects
-  if (slamData.point_cloud.length > 0) {
+  if (slamData.point_cloud?.length > 0) {
     pointCloudObj = buildPointCloud(slamData.point_cloud);
     scene.add(pointCloudObj);
   }
 
-  if (slamData.trajectory.length > 0) {
+  if (slamData.trajectory?.length > 0) {
     const { line, keyframes } = buildTrajectory(slamData.trajectory);
-    trajectoryLine = line;
-    keyframeMarkers = keyframes;
-    scene.add(trajectoryLine);
-    scene.add(keyframeMarkers);
-
-    frustumObj = buildFrustum();
-    scene.add(frustumObj);
+    trajectoryLine = line; keyframeMarkers = keyframes;
+    scene.add(trajectoryLine); scene.add(keyframeMarkers);
+    frustumObj = buildFrustum(); scene.add(frustumObj);
     updateFrustum(0);
-
-    // Center camera on trajectory
-    const midIdx = Math.floor(slamData.trajectory.length / 2);
-    const mid = slamData.trajectory[midIdx].position;
-    controls.target.set(mid[0], mid[1], mid[2]);
+    const mid = slamData.trajectory[Math.floor(slamData.trajectory.length / 2)].position;
+    controls.target.set(...mid);
   }
 
-  // Update UI
+  // Load objects if present (Phase 2 output)
+  if (slamData.objects?.length > 0) {
+    buildBoundingBoxes(slamData.objects);
+  }
+
+  // Load nav path if present (Phase 3 output)
+  if (slamData.nav_path?.length > 0) {
+    buildNavPath(slamData.nav_path);
+  }
+
   const meta = slamData.metadata;
-  document.getElementById('dataset-name').textContent =
-    `${meta.dataset} / ${meta.sequence}`;
-  document.getElementById('stat-points').textContent =
-    meta.num_points.toLocaleString();
-  document.getElementById('stat-frames').textContent =
-    meta.num_frames.toLocaleString();
-  document.getElementById('stat-kf').textContent =
-    slamData.trajectory.filter(f => f.is_keyframe).length;
+  document.getElementById('stat-dataset').textContent = meta.dataset + ' / ' + meta.sequence;
+  document.getElementById('hud-sequence').textContent = meta.dataset + ' · ' + meta.sequence;
+  document.getElementById('stat-points').textContent = meta.num_points.toLocaleString();
+  document.getElementById('stat-frames').textContent = meta.num_frames.toLocaleString();
+  document.getElementById('stat-kf').textContent = slamData.trajectory.filter(f => f.is_keyframe).length;
 
-  const timeline = document.getElementById('timeline');
-  timeline.max = Math.max(0, slamData.trajectory.length - 1);
+  const tl = document.getElementById('timeline');
+  tl.max = Math.max(0, slamData.trajectory.length - 1);
+  document.getElementById('frame-counter').textContent = `0 / ${slamData.trajectory.length}`;
 
-  document.getElementById('frame-counter').textContent =
-    `0 / ${slamData.trajectory.length}`;
-
-  // Hide loading
   document.getElementById('loading').classList.add('hidden');
 }
 
-// ─── Playback ─────────────────────────────────────────────────
+// ── Playback ──────────────────────────────────────────────────────────────────
 function setFrame(idx) {
   if (!slamData) return;
   currentFrame = Math.max(0, Math.min(idx, slamData.trajectory.length - 1));
   updateFrustum(currentFrame);
   document.getElementById('timeline').value = currentFrame;
-  document.getElementById('frame-counter').textContent =
-    `${currentFrame} / ${slamData.trajectory.length}`;
-
+  document.getElementById('frame-counter').textContent = `${currentFrame} / ${slamData.trajectory.length}`;
   const pos = slamData.trajectory[currentFrame]?.position;
-  if (pos) {
-    document.getElementById('stat-pos').textContent =
-      `${pos[0].toFixed(2)}, ${pos[1].toFixed(2)}, ${pos[2].toFixed(2)}`;
-  }
+  if (pos) document.getElementById('stat-pos').textContent = `${pos[0].toFixed(2)}, ${pos[1].toFixed(2)}, ${pos[2].toFixed(2)}`;
 }
 
 let lastPlayTime = 0;
-function updatePlayback(time) {
-  if (isPlaying && time - lastPlayTime > 50) {
-    lastPlayTime = time;
-    if (currentFrame < slamData.trajectory.length - 1) {
-      setFrame(currentFrame + playSpeed);
-    } else {
-      setFrame(0); // loop
-    }
+function updatePlayback(t) {
+  if (!isPlaying || !slamData) return;
+  if (t - lastPlayTime > 50) {
+    lastPlayTime = t;
+    setFrame(currentFrame < slamData.trajectory.length - 1 ? currentFrame + 1 : 0);
   }
 }
 
-// ─── Controls ─────────────────────────────────────────────────
+// ── Query handler (mock — will connect to Gemma 3 API) ───────────────────────
+function handleQuery(query) {
+  const log = document.getElementById('chat-log');
+  const addMsg = (text, cls) => {
+    const d = document.createElement('div');
+    d.className = `chat-msg ${cls}`;
+    d.textContent = text;
+    log.appendChild(d);
+    log.scrollTop = log.scrollHeight;
+  };
+
+  addMsg(query, 'user');
+
+  // Mock response — replace with fetch('/api/query') once Gemma 3 backend is running
+  if (!slamData?.objects?.length) {
+    addMsg('No objects in memory yet. Run Phase 2 (object detection) first.', 'system');
+    return;
+  }
+
+  const q = query.toLowerCase();
+  const match = slamData.objects.find(o => q.includes(o.label?.toLowerCase()));
+  if (match) {
+    const [x, y, z] = match.position;
+    addMsg(`Found "${match.label}" at (${x.toFixed(2)}, ${y.toFixed(2)}, ${z.toFixed(2)}). Navigating…`, 'result');
+    const objIdx = slamData.objects.indexOf(match);
+    highlightObject(objIdx);
+    document.querySelectorAll('#object-list li')[objIdx]?.classList.add('active');
+  } else {
+    addMsg(`"${query}" not found in spatial memory. Try running the scene through Gemma 3.`, 'system');
+  }
+}
+
+// ── Controls ──────────────────────────────────────────────────────────────────
 document.getElementById('btn-play').addEventListener('click', () => {
   isPlaying = !isPlaying;
   document.getElementById('btn-play').textContent = isPlaying ? '⏸ Pause' : '▶ Play';
   document.getElementById('btn-play').classList.toggle('active', isPlaying);
 });
-
-document.getElementById('timeline').addEventListener('input', (e) => {
-  setFrame(parseInt(e.target.value));
-});
-
-document.getElementById('btn-points').addEventListener('click', (e) => {
-  showPoints = !showPoints;
-  if (pointCloudObj) pointCloudObj.visible = showPoints;
+document.getElementById('timeline').addEventListener('input', e => setFrame(+e.target.value));
+document.getElementById('btn-points').addEventListener('click', e => {
+  showPoints = !showPoints; if (pointCloudObj) pointCloudObj.visible = showPoints;
   e.target.classList.toggle('active', showPoints);
 });
-
-document.getElementById('btn-traj').addEventListener('click', (e) => {
+document.getElementById('btn-traj').addEventListener('click', e => {
   showTrajectory = !showTrajectory;
   if (trajectoryLine) trajectoryLine.visible = showTrajectory;
   if (keyframeMarkers) keyframeMarkers.visible = showTrajectory;
   e.target.classList.toggle('active', showTrajectory);
 });
-
-document.getElementById('btn-frustum').addEventListener('click', (e) => {
-  showFrustum = !showFrustum;
-  if (frustumObj) frustumObj.visible = showFrustum;
+document.getElementById('btn-boxes').addEventListener('click', e => {
+  showBoxes = !showBoxes; bboxGroup.visible = showBoxes;
+  e.target.classList.toggle('active', showBoxes);
+});
+document.getElementById('btn-navpath').addEventListener('click', e => {
+  showNavPath = !showNavPath; if (navPathObj) navPathObj.visible = showNavPath;
+  e.target.classList.toggle('active', showNavPath);
+});
+document.getElementById('btn-frustum').addEventListener('click', e => {
+  showFrustum = !showFrustum; if (frustumObj) frustumObj.visible = showFrustum;
   e.target.classList.toggle('active', showFrustum);
 });
 
-document.addEventListener('keydown', (e) => {
-  if (e.code === 'Space') {
-    e.preventDefault();
-    document.getElementById('btn-play').click();
-  } else if (e.code === 'ArrowRight') {
-    setFrame(currentFrame + 1);
-  } else if (e.code === 'ArrowLeft') {
-    setFrame(currentFrame - 1);
-  } else if (e.code === 'KeyP') {
-    document.getElementById('btn-points').click();
-  } else if (e.code === 'KeyT') {
-    document.getElementById('btn-traj').click();
-  } else if (e.code === 'KeyF') {
-    document.getElementById('btn-frustum').click();
-  } else if (e.code === 'KeyC') {
-    colorMode = (colorMode + 1) % 3;
-    applyColorMode(slamData?.point_cloud, colorMode);
-  }
+document.getElementById('query-submit').addEventListener('click', () => {
+  const input = document.getElementById('query-input');
+  const q = input.value.trim();
+  if (q) { handleQuery(q); input.value = ''; }
+});
+document.getElementById('query-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') document.getElementById('query-submit').click();
 });
 
-// ─── Resize ───────────────────────────────────────────────────
-window.addEventListener('resize', () => {
-  camera.aspect = window.innerWidth / window.innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
+document.addEventListener('keydown', e => {
+  if (document.activeElement === document.getElementById('query-input')) return;
+  if (e.code === 'Space') { e.preventDefault(); document.getElementById('btn-play').click(); }
+  else if (e.code === 'ArrowRight') setFrame(currentFrame + 1);
+  else if (e.code === 'ArrowLeft')  setFrame(currentFrame - 1);
+  else if (e.code === 'KeyP') document.getElementById('btn-points').click();
+  else if (e.code === 'KeyT') document.getElementById('btn-traj').click();
+  else if (e.code === 'KeyB') document.getElementById('btn-boxes').click();
+  else if (e.code === 'KeyN') document.getElementById('btn-navpath').click();
+  else if (e.code === 'KeyF') document.getElementById('btn-frustum').click();
+  else if (e.code === 'KeyC') { colorMode = (colorMode + 1) % 3; applyColorMode(colorMode); }
 });
 
-// ─── Animation loop ───────────────────────────────────────────
-function animate(time) {
+// ── Animation loop ────────────────────────────────────────────────────────────
+function animate(t) {
   requestAnimationFrame(animate);
   controls.update();
-  updatePlayback(time);
+  updatePlayback(t);
+  updateObjectLabels();
   renderer.render(scene, camera);
 }
 
-// ─── Go ───────────────────────────────────────────────────────
 await init();
 animate(0);
 </script>
