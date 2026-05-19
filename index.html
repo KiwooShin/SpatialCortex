@@ -479,16 +479,15 @@
 <script type="importmap">
 {
   "imports": {
-    "three": "https://cdnjs.cloudflare.com/ajax/libs/three.js/r160/three.module.min.js"
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.min.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
   }
 }
 </script>
 
 <script type="module">
 import * as THREE from 'three';
-
-const OrbitControlsModule = await import('https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js');
-const OrbitControls = OrbitControlsModule.OrbitControls;
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 // ── Scene setup ───────────────────────────────────────────────────────────────
 const viewport = document.getElementById('viewport');
@@ -757,51 +756,51 @@ async function loadData(url) {
   return r.json();
 }
 
+const loadingText = document.querySelector('.loading-text');
+const setStatus = (msg) => { loadingText.textContent = msg; };
+
 async function init() {
   try {
+    setStatus('Fetching scene data…');
     slamData = await loadData('data/aria_vrs.json');
+
+    setStatus('Building point cloud…');
+      if (slamData.point_cloud?.length > 0) {
+      pointCloudObj = buildPointCloud(slamData.point_cloud);
+      scene.add(pointCloudObj);
+    }
+
+    setStatus('Building trajectory…');
+    if (slamData.trajectory?.length > 0) {
+      const { line, keyframes } = buildTrajectory(slamData.trajectory);
+      trajectoryLine = line; keyframeMarkers = keyframes;
+      scene.add(trajectoryLine); scene.add(keyframeMarkers);
+      frustumObj = buildFrustum(); scene.add(frustumObj);
+      updateFrustum(0);
+      const mid = slamData.trajectory[Math.floor(slamData.trajectory.length / 2)].position;
+      controls.target.set(...mid);
+    }
+
+    if (slamData.objects?.length > 0) buildBoundingBoxes(slamData.objects);
+    if (slamData.nav_path?.length > 0) buildNavPath(slamData.nav_path);
+
+    const meta = slamData.metadata;
+    document.getElementById('stat-dataset').textContent = meta.dataset + ' / ' + meta.sequence;
+    document.getElementById('hud-sequence').textContent = meta.dataset + ' · ' + meta.sequence;
+    document.getElementById('stat-points').textContent = meta.num_points.toLocaleString();
+    document.getElementById('stat-frames').textContent = meta.num_frames.toLocaleString();
+    document.getElementById('stat-kf').textContent = slamData.trajectory.filter(f => f.is_keyframe).length;
+
+    const tl = document.getElementById('timeline');
+    tl.max = Math.max(0, slamData.trajectory.length - 1);
+    document.getElementById('frame-counter').textContent = `0 / ${slamData.trajectory.length}`;
+
+    document.getElementById('loading').classList.add('hidden');
+
   } catch (e) {
-    document.querySelector('.loading-text').textContent = 'Error loading data';
-    return;
+    console.error('SpatialCortex init error:', e);
+    setStatus('Error: ' + e.message);
   }
-
-  if (slamData.point_cloud?.length > 0) {
-    pointCloudObj = buildPointCloud(slamData.point_cloud);
-    scene.add(pointCloudObj);
-  }
-
-  if (slamData.trajectory?.length > 0) {
-    const { line, keyframes } = buildTrajectory(slamData.trajectory);
-    trajectoryLine = line; keyframeMarkers = keyframes;
-    scene.add(trajectoryLine); scene.add(keyframeMarkers);
-    frustumObj = buildFrustum(); scene.add(frustumObj);
-    updateFrustum(0);
-    const mid = slamData.trajectory[Math.floor(slamData.trajectory.length / 2)].position;
-    controls.target.set(...mid);
-  }
-
-  // Load objects if present (Phase 2 output)
-  if (slamData.objects?.length > 0) {
-    buildBoundingBoxes(slamData.objects);
-  }
-
-  // Load nav path if present (Phase 3 output)
-  if (slamData.nav_path?.length > 0) {
-    buildNavPath(slamData.nav_path);
-  }
-
-  const meta = slamData.metadata;
-  document.getElementById('stat-dataset').textContent = meta.dataset + ' / ' + meta.sequence;
-  document.getElementById('hud-sequence').textContent = meta.dataset + ' · ' + meta.sequence;
-  document.getElementById('stat-points').textContent = meta.num_points.toLocaleString();
-  document.getElementById('stat-frames').textContent = meta.num_frames.toLocaleString();
-  document.getElementById('stat-kf').textContent = slamData.trajectory.filter(f => f.is_keyframe).length;
-
-  const tl = document.getElementById('timeline');
-  tl.max = Math.max(0, slamData.trajectory.length - 1);
-  document.getElementById('frame-counter').textContent = `0 / ${slamData.trajectory.length}`;
-
-  document.getElementById('loading').classList.add('hidden');
 }
 
 // ── Playback ──────────────────────────────────────────────────────────────────
