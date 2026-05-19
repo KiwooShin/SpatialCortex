@@ -121,7 +121,20 @@ python3 scripts/vrs_to_json.py \
   --subsample 1           # take every Nth VIO pose (1 = all)
 ```
 
-### 3. Launch the Three.js web viewer
+### 3. Extract RGB video for live camera feed sync
+
+Exports all RGB frames as a compressed MP4. The web viewer syncs this video with the 3D trajectory playback.
+
+```bash
+conda activate aria
+python3 scripts/extract_video.py \
+  --vrs /path/to/recording.vrs \
+  --output data/rgb_video.mp4\
+  --width 640 \
+  --fps 10
+```
+
+### 4. Launch the Three.js web viewer
 
 Interactive 3D map with sidebar query panel, object bounding boxes, and navigation path.
 
@@ -130,7 +143,7 @@ python3 -m http.server 8000
 # Open http://localhost:8000
 ```
 
-### 4. Launch the Rerun.io real-time dashboard
+### 5. Launch the Rerun.io real-time dashboard
 
 Streams RGB camera, SLAM cameras, VIO trajectory, and device pose into a Rerun timeline. Saves a `.rrd` replay file for offline demo.
 
@@ -180,13 +193,16 @@ Click an object in the sidebar → camera focuses on it, draws navigation path f
 
 ```
 SpatialCortex/
-├── index.html                  # Three.js interactive viewer
+├── index.html                  # Three.js interactive viewer (video sync + trajectory)
 ├── plan.md                     # 2-week build plan
 ├── scripts/
 │   ├── vrs_to_json.py          # Aria .vrs → viewer JSON (VIO trajectory + point cloud)
-│   └── visualize_vrs.py        # Rerun.io VRS dashboard (RGB + SLAM + trajectory)
+│   ├── visualize_vrs.py        # Rerun.io VRS dashboard (RGB + SLAM + trajectory)
+│   ├── extract_keyframes.py    # Extract N evenly-spaced JPEG keyframes for filmstrip
+│   └── extract_video.py        # Extract all RGB frames → MP4 for live video sync
 └── data/                       # gitignored — generated files go here
     ├── aria_vrs.json            # extracted from .vrs (vrs_to_json.py output)
+    ├── rgb_video.mp4            # RGB camera feed (extract_video.py output)
     ├── session.rrd              # Rerun recording (visualize_vrs.py output)
     ├── scene_db.sqlite          # object detections + metadata  (Phase 2)
     ├── scene.faiss              # CLIP embedding index           (Phase 2)

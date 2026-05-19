@@ -97,6 +97,38 @@
     margin-bottom: 10px;
   }
 
+  /* ── Video feed ─────────────────────────────────────── */
+  .video-block {
+    padding: 14px 20px 10px;
+    border-bottom: 1px solid rgba(100, 180, 255, 0.06);
+    flex-shrink: 0;
+  }
+
+  .video-block .section-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #2a3a5a;
+    margin-bottom: 8px;
+  }
+
+  #rgb-video {
+    width: 100%;
+    border-radius: 5px;
+    background: #000;
+    display: none;
+    border: 1px solid rgba(100, 180, 255, 0.1);
+  }
+
+  #video-placeholder {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: #2a3a5a;
+    font-style: italic;
+    padding: 2px 0;
+  }
+
   /* ── Filmstrip ───────────────────────────────────────── */
   .filmstrip-block {
     padding: 14px 20px;
@@ -480,6 +512,14 @@
     <div class="stat-row"><span class="label">Position </span><span class="value" id="stat-pos">—</span></div>
   </div>
 
+  <div class="video-block">
+    <div class="section-label">RGB Camera Feed</div>
+    <video id="rgb-video" preload="auto" playsinline muted>
+      <source src="data/rgb_video.mp4" type="video/mp4">
+    </video>
+    <div id="video-placeholder">Run extract_video.py to enable live feed</div>
+  </div>
+
   <div class="filmstrip-block">
     <div class="section-label">RGB Keyframes</div>
     <div id="filmstrip"><span style="font-family:monospace;font-size:10px;color:#2a3a5a">Loading…</span></div>
@@ -607,6 +647,12 @@ let currentFrame = 0, isPlaying = false;
 let showPoints = true, showTrajectory = true, showFrustum = true;
 let showBoxes = true, showNavPath = false;
 let colorMode = 0;
+
+// ── Video sync state ──────────────────────────────────────────────────────────
+let videoEl = null;
+let videoDuration = 0;
+let videoReady = false;
+let videoSeeking = false;
 
 const OBJECT_COLORS = [
   0x44ee88, 0x64b4ff, 0xffaa44, 0xff6688,
@@ -818,6 +864,42 @@ function highlightObject(idx) {
   }
 }
 
+// ── Video sync ────────────────────────────────────────────────────────────────
+function initVideo() {
+  const v = document.getElementById('rgb-video');
+  const placeholder = document.getElementById('video-placeholder');
+
+  v.addEventListener('loadedmetadata', () => {
+    videoDuration = v.duration;
+    videoReady = true;
+    v.style.display = 'block';
+    placeholder.style.display = 'none';
+  });
+
+  // When video ends, stop 3D playback too
+  v.addEventListener('ended', () => {
+    isPlaying = false;
+    document.getElementById('btn-play').textContent = '▶ Play';
+    document.getElementById('btn-play').classList.remove('active');
+  });
+
+  // No src / network error: keep placeholder
+  v.addEventListener('error', () => {});
+
+  videoEl = v;
+  v.load();
+}
+
+function syncVideoToFrame(idx) {
+  if (!videoReady || !videoEl || videoDuration <= 0) return;
+  const t = (idx / Math.max(1, (slamData?.trajectory?.length ?? 1) - 1)) * videoDuration;
+  if (Math.abs(videoEl.currentTime - t) > 0.08) {
+    videoSeeking = true;
+    videoEl.currentTime = t;
+    requestAnimationFrame(() => { videoSeeking = false; });
+  }
+}
+
 // ── Load data ─────────────────────────────────────────────────────────────────
 async function loadData(url) {
   const r = await fetch(url);
@@ -896,6 +978,7 @@ async function init() {
     document.getElementById('frame-counter').textContent = `0 / ${slamData.trajectory.length}`;
 
     document.getElementById('loading').classList.add('hidden');
+    initVideo();
     loadFilmstrip();
 
   } catch (e) {
@@ -905,7 +988,7 @@ async function init() {
 }
 
 // ── Playback ──────────────────────────────────────────────────────────────────
-function setFrame(idx) {
+function setFrame(idx, syncVideo = true) {
   if (!slamData) return;
   currentFrame = Math.max(0, Math.min(idx, slamData.trajectory.length - 1));
   updateFrustum(currentFrame);
@@ -913,14 +996,30 @@ function setFrame(idx) {
   document.getElementById('frame-counter').textContent = `${currentFrame} / ${slamData.trajectory.length}`;
   const pos = slamData.trajectory[currentFrame]?.position;
   if (pos) document.getElementById('stat-pos').textContent = `${pos[0].toFixed(2)}, ${pos[1].toFixed(2)}, ${pos[2].toFixed(2)}`;
+  if (syncVideo) syncVideoToFrame(currentFrame);
 }
 
 let lastPlayTime = 0;
 function updatePlayback(t) {
   if (!isPlaying || !slamData) return;
-  if (t - lastPlayTime > 50) {
-    lastPlayTime = t;
-    setFrame(currentFrame < slamData.trajectory.length - 1 ? currentFrame + 1 : 0);
+
+  if (videoReady && videoEl && videoDuration > 0) {
+    // Video is source of truth — read its currentTime every frame
+    const idx = Math.round(videoEl.currentTime / videoDuration * (slamData.trajectory.length - 1));
+    if (idx !== currentFrame) {
+      currentFrame = Math.max(0, Math.min(idx, slamData.trajectory.length - 1));
+      updateFrustum(currentFrame);
+      document.getElementById('timeline').value = currentFrame;
+      document.getElementById('frame-counter').textContent = `${currentFrame} / ${slamData.trajectory.length}`;
+      const pos = slamData.trajectory[currentFrame]?.position;
+      if (pos) document.getElementById('stat-pos').textContent = `${pos[0].toFixed(2)}, ${pos[1].toFixed(2)}, ${pos[2].toFixed(2)}`;
+    }
+  } else {
+    // Fallback: advance at 20 fps when no video
+    if (t - lastPlayTime > 50) {
+      lastPlayTime = t;
+      setFrame(currentFrame < slamData.trajectory.length - 1 ? currentFrame + 1 : 0);
+    }
   }
 }
 
@@ -961,6 +1060,9 @@ document.getElementById('btn-play').addEventListener('click', () => {
   isPlaying = !isPlaying;
   document.getElementById('btn-play').textContent = isPlaying ? '⏸ Pause' : '▶ Play';
   document.getElementById('btn-play').classList.toggle('active', isPlaying);
+  if (videoEl && videoReady) {
+    isPlaying ? videoEl.play() : videoEl.pause();
+  }
 });
 document.getElementById('timeline').addEventListener('input', e => setFrame(+e.target.value));
 document.getElementById('btn-points').addEventListener('click', e => {
