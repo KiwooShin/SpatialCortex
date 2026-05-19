@@ -83,48 +83,80 @@ SpatialCortex gives AR/VR devices (or robots) persistent spatial memory. On firs
 |---|---|
 | SLAM trajectory + point cloud visualization (Three.js) | ✅ Done |
 | Aria VRS → JSON converter (`vrs_to_json.py`) | ✅ Done |
-| 3D Gaussian Splatting reconstruction | 🔲 In progress |
-| Grounded-SAM 2 → 3D object detection | 🔲 In progress |
+| Rerun.io VRS viewer (`visualize_vrs.py`) | ✅ Done |
+| Three.js interactive map — bounding boxes, nav path, query sidebar | ✅ Done |
+| 3D Gaussian Splatting reconstruction | 🔲 Planned |
+| Grounded-SAM 2 → 3D object detection | 🔲 Planned |
 | CLIP + FAISS spatial memory DB | 🔲 Planned |
 | Gemma 3 27B spatial query pipeline | 🔲 Planned |
 | Re-localization + navigation | 🔲 Planned |
-| Three.js interactive map upgrade | 🔲 Planned |
-| Rerun.io real-time dashboard | 🔲 Planned |
 | End-to-end demo video | 🔲 Planned |
 
 ---
 
-## Quick Start
+## How to Run
 
-### Visualize the SLAM viewer (current)
+### 1. Clone & setup environment
 
 ```bash
 git clone https://github.com/KiwooShin/SpatialCortex.git
 cd SpatialCortex
 
-# Generate data from a Project Aria .vrs file
-/path/to/miniconda3/envs/aria/bin/python3 scripts/vrs_to_json.py \
-  --vrs /path/to/recording.vrs \
-  --output data/aria_vrs.json
+# Create conda environment with projectaria-tools + rerun
+conda create -n aria python=3.10 -y
+conda activate aria
+pip install projectaria-tools rerun-sdk
+```
 
-# Serve locally
+### 2. Extract SLAM data from a VRS recording
+
+Converts VIO trajectory and synthesizes a point cloud from a raw Project Aria `.vrs` file into the JSON format consumed by the web viewer.
+
+```bash
+conda activate aria
+python3 scripts/vrs_to_json.py \
+  --vrs /path/to/recording.vrs \
+  --output data/aria_vrs.json \
+  --points 15000          # number of synthetic environment points
+  --subsample 1           # take every Nth VIO pose (1 = all)
+```
+
+### 3. Launch the Three.js web viewer
+
+Interactive 3D map with sidebar query panel, object bounding boxes, and navigation path.
+
+```bash
 python3 -m http.server 8000
 # Open http://localhost:8000
 ```
 
-### Environment setup (DGX Spark)
+### 4. Launch the Rerun.io real-time dashboard
+
+Streams RGB camera, SLAM cameras, VIO trajectory, and device pose into a Rerun timeline. Saves a `.rrd` replay file for offline demo.
 
 ```bash
-conda create -n spatialcortex python=3.10 -y
-conda activate spatialcortex
-pip install projectaria-tools torch torchvision
-pip install git+https://github.com/facebookresearch/segment-anything-2
-pip install open_clip_torch faiss-gpu rerun-sdk
+conda activate aria
+
+# Live interactive viewer
+python3 scripts/visualize_vrs.py \
+  --vrs /path/to/recording.vrs
+
+# Save .rrd for offline replay
+python3 scripts/visualize_vrs.py \
+  --vrs /path/to/recording.vrs \
+  --rrd data/session.rrd \
+  --downsample 4 \
+  --jpeg-quality 75
+
+# Replay saved session
+rerun data/session.rrd
 ```
 
 ---
 
 ## Viewer Controls
+
+### Three.js web viewer
 
 | Input | Action |
 |---|---|
@@ -135,8 +167,12 @@ pip install open_clip_torch faiss-gpu rerun-sdk
 | `←` `→` | Step frames |
 | `P` | Toggle point cloud |
 | `T` | Toggle trajectory |
+| `B` | Toggle bounding boxes |
+| `N` | Toggle navigation path |
 | `F` | Toggle camera frustum |
 | `C` | Cycle color mode (height / confidence / uniform) |
+
+Click an object in the sidebar → camera focuses on it, draws navigation path from current position.
 
 ---
 
@@ -144,15 +180,17 @@ pip install open_clip_torch faiss-gpu rerun-sdk
 
 ```
 SpatialCortex/
-├── index.html              # Three.js SLAM viewer
-├── plan.md                 # 2-week build plan
+├── index.html                  # Three.js interactive viewer
+├── plan.md                     # 2-week build plan
 ├── scripts/
-│   └── vrs_to_json.py      # Aria .vrs → viewer JSON (VIO trajectory + point cloud)
-└── data/                   # gitignored — generated files go here
-    ├── aria_vrs.json        # extracted from .vrs
-    ├── scene_db.sqlite      # object detections + metadata
-    ├── scene.faiss          # CLIP embedding index
-    └── splat.ply            # 3DGS output
+│   ├── vrs_to_json.py          # Aria .vrs → viewer JSON (VIO trajectory + point cloud)
+│   └── visualize_vrs.py        # Rerun.io VRS dashboard (RGB + SLAM + trajectory)
+└── data/                       # gitignored — generated files go here
+    ├── aria_vrs.json            # extracted from .vrs (vrs_to_json.py output)
+    ├── session.rrd              # Rerun recording (visualize_vrs.py output)
+    ├── scene_db.sqlite          # object detections + metadata  (Phase 2)
+    ├── scene.faiss              # CLIP embedding index           (Phase 2)
+    └── splat.ply                # 3DGS reconstruction            (Phase 2)
 ```
 
 ---
