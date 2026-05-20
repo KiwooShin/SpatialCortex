@@ -223,6 +223,131 @@ swap COLMAP poses for ORB-SLAM3 poses, keep everything else unchanged.
 
 ---
 
+## DGX Spark Setup — Migration from macOS
+
+### Step 1 — Verify the DGX environment
+```bash
+ssh user@dgx-spark-ip
+nvidia-smi                  # confirm GPU visible, note CUDA version
+nvcc --version              # confirm CUDA toolkit installed
+cat /etc/os-release         # should be Ubuntu 22.04
+python3 --version
+```
+DGX Spark ships with CUDA pre-installed. GB10 (Grace Blackwell) = **sm_100**.
+Run `python -c "import torch; print(torch.cuda.get_device_capability())"` after
+PyTorch install to confirm arch — use that value for `TORCH_CUDA_ARCH_LIST`.
+
+### Step 2 — Transfer data from Mac
+```bash
+# From Mac — transfer VRS (256MB) and COLMAP output (45MB)
+rsync -avh --progress \
+  /Users/kiwooshin/work/aria_dataset/aria_gen2_sample_data_1.vrs \
+  user@dgx-spark-ip:~/data/
+
+rsync -avh --progress \
+  /Users/kiwooshin/work/SpatialCortex/data/colmap/ \
+  user@dgx-spark-ip:~/SpatialCortex/data/colmap/
+```
+COLMAP is already done on Mac — no need to re-run unless more frames are needed.
+
+### Step 3 — Clone the repo
+```bash
+git clone https://github.com/KiwooShin/SpatialCortex.git ~/SpatialCortex
+cd ~/SpatialCortex
+```
+
+### Step 4 — Install Miniconda
+```bash
+wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
+bash Miniconda3-latest-Linux-x86_64.sh -b -p ~/miniconda3
+~/miniconda3/bin/conda init bash && source ~/.bashrc
+```
+
+### Step 5 — Recreate the aria conda environment
+```bash
+conda create -n aria python=3.10 -y
+conda activate aria
+pip install projectaria-tools rerun-sdk pillow tqdm numpy
+
+# Verify VRS pipeline works
+python3 scripts/vrs_to_json.py \
+  --vrs ~/data/aria_gen2_sample_data_1.vrs \
+  --output data/aria_vrs.json
+```
+
+### Step 6 — Install 3D Gaussian Splatting
+```bash
+conda create -n gaussian_splatting python=3.10 -y
+conda activate gaussian_splatting
+
+# PyTorch with CUDA (match nvcc --version output)
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+
+# Clone 3DGS with submodules
+git clone https://github.com/graphdeco-inria/gaussian-splatting \
+  --recursive ~/gaussian-splatting
+cd ~/gaussian-splatting
+
+pip install plyfile tqdm numpy Pillow scipy
+
+# Build CUDA submodules — set arch to match GPU
+export TORCH_CUDA_ARCH_LIST="10.0"   # Blackwell sm_100 (check nvidia-smi)
+pip install submodules/diff-gaussian-rasterization
+pip install submodules/simple-knn
+```
+
+### Step 7 — Run 3DGS training
+```bash
+conda activate gaussian_splatting
+cd ~/gaussian-splatting
+
+python train.py \
+  -s ~/SpatialCortex/data/colmap \
+  -m ~/SpatialCortex/data/gaussian_output \
+  --iterations 30000
+```
+
+Input layout expected under `-s` (already produced by `run_colmap.py`):
+```
+data/colmap/
+├── images/          ← undistorted JPEG frames (960x720)
+└── sparse/0/
+    ├── cameras.txt  ← PINHOLE 960 720 fx fy cx cy
+    ├── images.txt
+    └── points3D.txt ← 4,266 sparse points
+```
+Training ~30 min on DGX Spark. Output → `data/gaussian_output/`.
+
+### Step 8 — Render and verify
+```bash
+python render.py -m ~/SpatialCortex/data/gaussian_output
+python metrics.py -m ~/SpatialCortex/data/gaussian_output
+# Renders → data/gaussian_output/train/ours_30000/renders/
+```
+
+### Environment map
+
+| Item | Mac | DGX Spark |
+|---|---|---|
+| Repo | `/Users/kiwooshin/work/SpatialCortex` | `~/SpatialCortex` |
+| VRS file | `/Users/kiwooshin/work/aria_dataset/` | `~/data/` |
+| COLMAP output | `data/colmap/` | `data/colmap/` (rsync from Mac) |
+| 3DGS repo | not needed | `~/gaussian-splatting/` |
+| 3DGS output | not needed | `data/gaussian_output/` |
+| conda env (scripts) | `aria` | `aria` |
+| conda env (training) | not applicable | `gaussian_splatting` |
+
+### Potential issues
+
+| Issue | Fix |
+|---|---|
+| `TORCH_CUDA_ARCH_LIST` mismatch — crash at runtime | Check `torch.cuda.get_device_capability()`, set flag to match |
+| Hopper chip instead of Blackwell | Use `export TORCH_CUDA_ARCH_LIST="9.0"` |
+| Low 3DGS quality (46 frames marginal) | Re-run `run_colmap.py --every-nth 2` (200 frames), retrain |
+| OOM (unlikely on 128GB) | Add `--resolution 2` to halve image size |
+
+---
+
 ## Key Research Concepts Featured
 
 - **3D Gaussian Splatting** (Kerbl et al., ICCV 2023 best paper) — scene representation
