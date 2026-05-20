@@ -23,12 +23,78 @@ VRS → extract frames (undistorted, pinhole) → COLMAP feature extraction
 **Why COLMAP first:** no cloud account needed, output directly feeds 3DGS, well-tested.
 
 ### Phase 2 — ORB-SLAM3 (future, loop-closed trajectory)
-Replace COLMAP with ORB-SLAM3 for loop-closed trajectory + denser point tracking.
-ORB-SLAM3 supports fisheye cameras (Aria SLAM cameras) and IMU fusion via EuRoC format.
-Use MPS output for comparison/validation once available.
 
-**Migration path:** ORB-SLAM3 outputs a TUM-format trajectory that can feed the same
-downstream 3DGS pipeline. Swap out COLMAP poses with ORB-SLAM3 poses, keep everything else.
+Replace COLMAP with ORB-SLAM3 for loop-closed trajectory + denser point tracking.
+ORB-SLAM3 supports fisheye cameras natively (KannalaBrandt8) and fuses IMU for
+loop-closed trajectories comparable to MPS quality — fully local, no cloud needed.
+
+#### What needs to be done
+
+**Step 1 — Build ORB-SLAM3 from source (~1 hour, mostly compile time)**
+```bash
+brew install cmake eigen opencv pangolin   # macOS deps
+git clone https://github.com/UZ-SLAMLab/ORB_SLAM3
+cd ORB_SLAM3 && chmod +x build.sh && ./build.sh
+# g2o, DBoW2, Sophus are bundled — no separate install
+```
+
+**Step 2 — Export VRS → EuRoC format (`scripts/export_euroc.py`, ~2 hours)**
+
+ORB-SLAM3 expects this directory layout:
+```
+euroc_export/
+├── cam0/data/     ← slam-front-left frames, filename = timestamp_ns.png
+├── cam1/data/     ← slam-front-right frames (stereo mode)
+└── imu0/data.csv  ← timestamp, wx, wy, wz, ax, ay, az
+```
+Use Aria SLAM cameras (grayscale 512×512, ~20Hz) not RGB — higher frequency,
+better stereo overlap, designed for SLAM. Time-sync to IMU from VRS.
+
+**Step 3 — Write Aria Gen2 camera YAML config (`configs/aria_gen2_slam.yaml`, ~1 hour)**
+
+ORB-SLAM3 uses KannalaBrandt8 (KB8) fisheye model. Aria uses FISHEYE624 —
+the first 4 distortion coefficients map approximately to KB8's k1,k2,k3,k4.
+Read exact values from VRS calibration via projectaria_tools.
+
+```yaml
+Camera.type: "KannalaBrandt8"
+Camera.fx: 241.0      # from Aria SLAM camera calibration
+Camera.fy: 241.0
+Camera.cx: 256.0
+Camera.cy: 256.0
+Camera.k1: ...        # FISHEYE624[0..3] ≈ KB8 coefficients
+Camera.k2: ...
+Camera.k3: ...
+Camera.k4: ...
+IMU.NoiseGyro: 0.002
+IMU.NoiseAcc: 0.02
+# T_cam_imu: extrinsics from device calibration
+```
+
+**Step 4 — Choose run mode and test (~30 min)**
+
+| Mode | Cameras | Loop closure | Notes |
+|---|---|---|---|
+| Monocular-Inertial | slam-front-left + IMU | Yes | Easiest to start |
+| **Stereo-Inertial** | slam-front-left + right + IMU | Yes | **Best — matches MPS quality** |
+| Monocular | slam-front-left only | Yes | No IMU, slower convergence |
+
+Target: **Stereo-Inertial** — same setup MPS uses internally.
+
+#### Migration path from COLMAP
+
+| | COLMAP (Phase 1) | ORB-SLAM3 (Phase 2) |
+|---|---|---|
+| Input cameras | RGB (10fps, fisheye→pinhole) | SLAM cams (20Hz, fisheye native) |
+| IMU | No | Yes — fused |
+| Trajectory | SfM keyframes only | Continuous 1kHz, loop-closed |
+| Points | Sparse SfM | Semi-dense ORB map |
+| Camera model | Pinhole (undistorted) | KannalaBrandt8 |
+| Output | cameras/images/points3D.txt | TUM trajectory + map points |
+| 3DGS compatibility | Direct | Needs format converter |
+
+Output format changes but the downstream 3DGS pipeline stays the same —
+swap COLMAP poses for ORB-SLAM3 poses, keep everything else unchanged.
 
 ---
 
