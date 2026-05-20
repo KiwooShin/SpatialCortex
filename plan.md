@@ -8,6 +8,30 @@
 
 ---
 
+## SLAM Point Cloud Strategy
+
+### Phase 1 — COLMAP (local, no cloud dependency)
+Run COLMAP Structure-from-Motion on extracted Aria RGB frames with known intrinsics from device calibration.
+Produces sparse point cloud + refined camera poses in the exact format 3DGS expects.
+
+```
+VRS → extract frames (undistorted, pinhole) → COLMAP feature extraction
+   → sequential matcher → mapper → sparse/0/{cameras,images,points3D}.txt
+   → input for gaussian-splatting
+```
+
+**Why COLMAP first:** no cloud account needed, output directly feeds 3DGS, well-tested.
+
+### Phase 2 — ORB-SLAM3 (future, loop-closed trajectory)
+Replace COLMAP with ORB-SLAM3 for loop-closed trajectory + denser point tracking.
+ORB-SLAM3 supports fisheye cameras (Aria SLAM cameras) and IMU fusion via EuRoC format.
+Use MPS output for comparison/validation once available.
+
+**Migration path:** ORB-SLAM3 outputs a TUM-format trajectory that can feed the same
+downstream 3DGS pipeline. Swap out COLMAP poses with ORB-SLAM3 poses, keep everything else.
+
+---
+
 ## Tech Stack
 
 | Layer | Technology | Why it's impressive |
@@ -31,10 +55,11 @@
 - Confirm Aria VRS pipeline end-to-end (`vrs_to_json.py` → Three.js viewer)
 
 ### Day 2 — 3D Gaussian Splatting Reconstruction
-- Extract SLAM keyframes + camera poses from Aria VRS using `projectaria_tools`
-- Run **3DGS training** on the keyframes (~30 min on DGX Spark)
+- Run `scripts/run_colmap.py` to extract undistorted frames + camera poses via COLMAP SfM
+- Run **3DGS training** on COLMAP output (~30 min on DGX Spark)
 - Render a flythrough video of the reconstructed scene
 - Export Gaussian splat centers as `.ply` for web viewer
+- *(Future)* Swap COLMAP poses for ORB-SLAM3 loop-closed trajectory (Phase 2 SLAM)
 
 ### Day 3 — Open-Vocabulary 3D Object Detection
 - Run **Grounded-SAM 2** on all SLAM keyframes with a broad text prompt ("all objects")

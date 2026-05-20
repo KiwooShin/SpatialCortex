@@ -10,6 +10,10 @@ data/*.ply
 data/*.faiss
 data/*.sqlite
 data/*.mp4
+
+# COLMAP output
+data/colmap/
+data/colmap_*/
 # Keyframes are tracked (small JPEGs for demo)
 # data/keyframes/ is intentionally NOT ignored
 
