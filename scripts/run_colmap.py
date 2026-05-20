@@ -190,7 +190,6 @@ def run_colmap(colmap_bin: str, out_dir: Path, manifest: dict) -> None:
             "--ImageReader.single_camera", "1",
             "--ImageReader.camera_model", "PINHOLE",
             "--ImageReader.camera_params", camera_params,
-            "--SiftExtraction.use_gpu", "0",
         ],
         f"Feature extraction (PINHOLE {w}x{h}, f={f:.1f})",
     )
@@ -202,7 +201,6 @@ def run_colmap(colmap_bin: str, out_dir: Path, manifest: dict) -> None:
             "--database_path", str(db),
             "--SequentialMatching.overlap", "15",
             "--SequentialMatching.loop_detection", "1",
-            "--SiftMatching.use_gpu", "0",
         ],
         "Sequential feature matching (overlap=15, loop detection on)",
     )
