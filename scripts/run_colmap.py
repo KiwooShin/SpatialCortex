@@ -200,9 +200,8 @@ def run_colmap(colmap_bin: str, out_dir: Path, manifest: dict) -> None:
             colmap_bin, "sequential_matcher",
             "--database_path", str(db),
             "--SequentialMatching.overlap", "15",
-            "--SequentialMatching.loop_detection", "1",
         ],
-        "Sequential feature matching (overlap=15, loop detection on)",
+        "Sequential feature matching (overlap=15)",
     )
 
     # 3. Sparse reconstruction
