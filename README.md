@@ -2,7 +2,7 @@
 
 **Spatial memory system for AR/VR — walk into a room, remember it forever, query it in natural language.**
 
-> Built on 3D Gaussian Splatting · Grounded-SAM 2 · Depth Anything V2 · CLIP · Gemma 3 27B · Three.js · Rerun.io
+> Built on 3D Gaussian Splatting · EFM3D · CLIP ViT-L/14 · LLaVA 1.5 7B · Three.js · Rerun.io
 
 ---
 
@@ -73,7 +73,7 @@ SpatialCortex gives AR/VR devices (or robots) persistent spatial memory. On firs
 | Depth estimation | Depth Anything V2 metric-indoor (COLMAP scale-calibrated) |
 | 3D lifting | Depth unprojection → axis-aligned 3D bboxes, visualized as projected cuboids |
 | Semantic embeddings | CLIP ViT-L/14 + FAISS |
-| Spatial VLM | Gemma 3 27B multimodal (on-device, DGX Spark) |
+| Spatial VLM | LLaVA 1.5 7B (on-device, HF cache, no token required) |
 | Spatial database | SQLite + FAISS index |
 | Visualization | Three.js (interactive web map) + Rerun.io (real-time dashboard) |
 | Navigation | Dijkstra on SLAM waypoint graph |
@@ -97,8 +97,8 @@ SpatialCortex gives AR/VR devices (or robots) persistent spatial memory. On firs
 | **Best-view crop extraction per object (`extract_crops.py`)** | ✅ Done |
 | **CLIP ViT-L/14 embedding + FAISS index (`build_scene_db.py`)** | ✅ Done |
 | **Natural language query CLI (`query_scene.py`)** | ✅ Done |
-| 3D Gaussian Splatting reconstruction | 🔲 In progress |
-| Gemma 3 27B visual confirmation (`query_scene.py --vlm`) | 🔲 Needs model download |
+| **3D Gaussian Splatting reconstruction** | ✅ Done (30k iter, 210 MB `.ply` + flythrough) |
+| LLaVA 1.5 7B visual confirmation (`query_scene.py --vlm`) | 🔲 Model downloading |
 | Grounded-SAM 2 on registered frames (`run_gsam2.py`) | 🔲 In progress |
 | Depth Anything V2 + COLMAP scale calibration (`estimate_depth.py`) | 🔲 In progress |
 | Re-localization + navigation | 🔲 Planned |
@@ -223,8 +223,8 @@ python scripts/query_scene.py --query "find me a lamp" --scene seq02
 # Interactive query loop
 python scripts/query_scene.py --interactive
 
-# With Gemma 3 visual confirmation (requires model download first)
-python scripts/query_scene.py --download-vlm   # one-time download
+# With LLaVA 1.5 7B visual confirmation (requires model download first)
+python scripts/query_scene.py --download-vlm   # one-time download (~13 GB)
 python scripts/query_scene.py --query "where is the bed" --vlm
 ```
 

@@ -41,7 +41,7 @@ CLIP_PRETRAINED = 'openai'
 DEFAULT_DB      = 'data/scene_db.sqlite'
 DEFAULT_FAISS   = 'data/scene.faiss'
 DEFAULT_TOP_K   = 5
-VLM_MODEL       = 'google/gemma-3-4b-it'   # swap to 27b-it for highest quality
+VLM_MODEL       = 'llava-hf/llava-1.5-7b-hf'   # no HF token required; swap to google/gemma-3-27b-it for highest quality
 
 
 # ── CLIP ─────────────────────────────────────────────────────────────────────
@@ -94,99 +94,81 @@ def nearby_objects(conn, obj, radius_m=1.5, exclude_id=None):
 
 # ── VLM (Gemma 3) ─────────────────────────────────────────────────────────────
 
-_vlm_model = None
-_vlm_processor = None
+_vlm_pipe = None
 
 
 def load_vlm(device):
-    global _vlm_model, _vlm_processor
-    if _vlm_model is not None:
-        return _vlm_model, _vlm_processor
+    global _vlm_pipe
+    if _vlm_pipe is not None:
+        return _vlm_pipe
 
     print(f"Loading VLM {VLM_MODEL} …", flush=True)
-    from transformers import AutoProcessor, AutoModelForImageTextToText
+    from transformers import pipeline as hf_pipeline
+    import os as _os
+    _os.environ['HF_HUB_OFFLINE'] = '1'   # use cached weights only
 
-    _vlm_processor = AutoProcessor.from_pretrained(VLM_MODEL)
-    _vlm_model = AutoModelForImageTextToText.from_pretrained(
-        VLM_MODEL,
-        torch_dtype=torch.bfloat16,
+    _vlm_pipe = hf_pipeline(
+        'image-to-text',
+        model=VLM_MODEL,
+        torch_dtype=torch.float16,
         device_map='auto',
     )
-    _vlm_model.eval()
     print("VLM loaded.")
-    return _vlm_model, _vlm_processor
+    return _vlm_pipe
 
 
 def vlm_confirm(candidates, query, device):
     """
-    Show top candidates to Gemma 3 and ask which best matches the query.
+    Show top candidates to LLaVA and ask which best matches the query.
     Returns (best_candidate_dict, explanation_str).
+    LLaVA 1.5 takes one image at a time, so we query per candidate and pick best.
     """
-    vlm, processor = load_vlm(device)
+    pipe = load_vlm(device)
 
-    # Build a message with images + descriptions
-    content = []
     valid_cands = [c for c in candidates if c['crop_path'] and os.path.exists(c['crop_path'])]
     if not valid_cands:
         return candidates[0], "No crop images available for VLM confirmation."
 
-    # Up to 3 images
-    imgs = []
-    desc_lines = []
+    best_cand = valid_cands[0]
+    best_reply = ""
+    best_score = -1
+
     for i, c in enumerate(valid_cands[:3]):
         try:
             img = Image.open(c['crop_path']).convert('RGB')
-            # Resize to max 512px on the long side to save tokens
             max_sz = 512
             w, h = img.size
             if max(w, h) > max_sz:
                 scale = max_sz / max(w, h)
-                img = img.resize((int(w*scale), int(h*scale)), Image.LANCZOS)
-            imgs.append(img)
-            content.append({"type": "image"})
-            desc_lines.append(
-                f"Option {i+1}: {c['name']} in scene {c['scene']} "
-                f"at position ({c['tx']:.2f}, {c['ty']:.2f}, {c['tz']:.2f})m"
-            )
+                img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
         except Exception:
-            pass
+            continue
 
-    if not imgs:
-        return candidates[0], "Could not open crop images."
-
-    desc_text = "\n".join(desc_lines)
-    content.append({"type": "text", "text": (
-        f"The user is searching for: \"{query}\"\n\n"
-        f"These are the top candidate objects found in the room:\n{desc_text}\n\n"
-        f"Which image best matches what the user is looking for? "
-        f"Reply with the option number (1, 2, or 3) and one sentence describing "
-        f"where the object is in the room relative to other objects."
-    )})
-
-    messages = [{"role": "user", "content": content}]
-    inputs = processor.apply_chat_template(
-        messages, add_generation_prompt=True, tokenize=True,
-        return_dict=True, return_tensors="pt"
-    ).to(vlm.device)
-
-    with torch.inference_mode():
-        out = vlm.generate(
-            **inputs,
-            max_new_tokens=120,
-            do_sample=False,
+        prompt = (
+            f"USER: <image>\n"
+            f"The user is searching for: \"{query}\"\n"
+            f"This image shows a {c['name']} detected in a room at position "
+            f"({c['tx']:.1f}, {c['ty']:.1f}, {c['tz']:.1f})m.\n"
+            f"Does this image match what the user is looking for? "
+            f"Answer YES or NO, then describe what you see in one sentence.\n"
+            f"ASSISTANT:"
         )
 
-    prompt_len = inputs['input_ids'].shape[1]
-    reply = processor.decode(out[0][prompt_len:], skip_special_tokens=True).strip()
+        out = pipe(img, prompt=prompt, generate_kwargs={
+            'max_new_tokens': 80,
+            'do_sample': False,
+        })
+        reply = out[0]['generated_text'].split('ASSISTANT:')[-1].strip()
 
-    # Try to parse which option was chosen
-    chosen = valid_cands[0]
-    for i, c in enumerate(valid_cands[:3]):
-        if str(i + 1) in reply[:10]:
-            chosen = c
-            break
+        # Score: YES answer for correct class beats NO
+        score = 1 if reply.upper().startswith('YES') else 0
+        if score > best_score:
+            best_score = score
+            best_cand = c
+            best_reply = reply
 
-    return chosen, reply
+    summary = f"[Option ranked by VLM] {best_cand['name']} in {best_cand['scene']}: {best_reply}"
+    return best_cand, summary
 
 
 # ── Result formatting ──────────────────────────────────────────────────────────

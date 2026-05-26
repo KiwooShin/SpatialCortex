@@ -447,6 +447,19 @@ pip install torch torchvision transformers accelerate open_clip_torch faiss-gpu 
 
 ### 2026-05-26
 
+**3D Gaussian Splatting — training complete**
+
+- 3DGS training ran on COLMAP data (200 images, PINHOLE 960×720, 4266 sparse points) for 30 000 iterations on DGX Spark.
+- Output: `data/gaussian_output/point_cloud/iteration_30000/point_cloud.ply` (210 MB), `point_cloud.ply.splat` (27 MB for WebGL), `flythrough.mp4` (2.8 MB).
+- Next: export splat centers to Three.js viewer overlay; run `render.py` for per-camera renders.
+
+**VLM — switched from Gemma 3 to LLaVA 1.5 7B**
+
+- Gemma 3 27B and 4B are gated on HuggingFace and require an access token not present on this machine.
+- Switched VLM to `llava-hf/llava-1.5-7b-hf` (not gated, no token required, 13 GB).
+- `query_scene.py` updated: `load_vlm()` uses `pipeline('image-to-text', device_map='auto', torch_dtype=float16)`; `vlm_confirm()` queries each top-3 candidate individually with a YES/NO prompt and picks the highest-scoring match.
+- LLaVA download running in background (~7 GB received of ~13 GB as of this writing).
+
 **Query pipeline — fully operational (Steps 1–3 complete)**
 
 **Step 1 — Crop extraction (`scripts/extract_crops.py`)**
