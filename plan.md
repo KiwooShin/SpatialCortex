@@ -368,6 +368,81 @@ python metrics.py -m ~/SpatialCortex/data/gaussian_output
 
 ---
 
+## Query Pipeline Plan
+
+**Goal**: Natural language → 3D object location, powered by CLIP retrieval + Gemma 3 27B visual confirmation.
+
+```
+scene_obbs.csv  →  [1] Crop extraction  →  crops/{scene}/{id}.jpg
+                →  [2] CLIP encoding    →  512/768-dim vectors
+                →  [3] DB build         →  scene_db.sqlite + scene.faiss
+                →  [4] Query CLI        →  text → CLIP → FAISS → Gemma 3 → 3D location
+```
+
+### Step 1 — Crop Extraction (`scripts/extract_crops.py`)
+
+For each fused object in `scene_obbs.csv`, find the single best RGB crop:
+- Match fused object → raw snippet detection by class + Euclidean dist < 0.8 m; pick highest-prob match
+- Project 3D OBB corners into fisheye image at that timestamp using the same pipeline as `visualize_efm3d_obbs.py`
+- Take axis-aligned bounding rect of valid projected corners + 20% padding
+- Apply CW 90° rotation before cropping; clamp to image bounds
+- Fall back to next-best timestamp if fewer than 4 corners project
+
+Inputs: `scene_obbs.csv`, `snippet_obbs.csv`, `main.vrs`, `closed_loop_trajectory.csv`
+Output: `output/crops/{scene}/{obj_id}_{class}.jpg` + `crop_path`/`best_ts_ns` columns appended to scene_obbs
+
+### Step 2 — CLIP Encoding + DB Build (`scripts/build_scene_db.py`)
+
+- Model: `open_clip` ViT-L-14 / openai weights → 768-dim normalized vectors
+- FAISS: `IndexFlatIP` (cosine similarity, exact search; ~100 objects total → flat is fine)
+- SQLite schema: id, scene, name, prob, count, tx/ty/tz, quaternion, scale_x/y/z, crop_path, clip_idx
+
+```sql
+CREATE TABLE objects (
+    id INTEGER PRIMARY KEY, scene TEXT, name TEXT,
+    prob REAL, count INTEGER,
+    tx REAL, ty REAL, tz REAL,
+    qw REAL, qx REAL, qy REAL, qz REAL,
+    scale_x REAL, scale_y REAL, scale_z REAL,
+    crop_path TEXT, clip_idx INTEGER
+);
+```
+
+Output: `data/scene_db.sqlite`, `data/scene.faiss`
+
+### Step 3 — Query CLI (`scripts/query_scene.py`)
+
+```
+$ python scripts/query_scene.py --query "where is the chair"
+Top matches:
+  [1] chair  seq01  prob=0.99  pos=(-2.11, -0.81, -1.19)  sim=0.82
+Gemma 3: "The office chair is 2.3m to your left, next to the sofa."
+```
+
+Flow: CLIP text encode → FAISS top-k → load crops + metadata → Gemma 3 27B visual confirmation → print 3D location
+- `--no-vlm` flag to skip Gemma and use CLIP-only retrieval
+- Gemma 3 access: `transformers` with `google/gemma-3-27b-it` or `ollama run gemma3:27b`
+
+### Dependencies
+
+```bash
+# Add to efm3d env (already has projectaria_tools)
+pip install open_clip_torch faiss-gpu
+
+# New env for Gemma 3
+conda create -n spatialcortex python=3.10 -y
+pip install torch torchvision transformers accelerate open_clip_torch faiss-gpu pillow pandas numpy
+```
+
+### Build order
+
+1. `extract_crops.py` — validate crops visually first
+2. `build_scene_db.py` — embed validated crops → FAISS + SQLite
+3. `query_scene.py --no-vlm` — verify CLIP retrieval quality
+4. Wire in Gemma 3 for VLM confirmation
+
+---
+
 ## Progress Log
 
 ### 2026-05-25
