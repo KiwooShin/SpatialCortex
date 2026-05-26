@@ -94,27 +94,27 @@ def nearby_objects(conn, obj, radius_m=1.5, exclude_id=None):
 
 # ── VLM (Gemma 3) ─────────────────────────────────────────────────────────────
 
-_vlm_pipe = None
+_vlm_model = None
+_vlm_processor = None
 
 
 def load_vlm(device):
-    global _vlm_pipe
-    if _vlm_pipe is not None:
-        return _vlm_pipe
+    global _vlm_model, _vlm_processor
+    if _vlm_model is not None:
+        return _vlm_model, _vlm_processor
 
     print(f"Loading VLM {VLM_MODEL} …", flush=True)
-    from transformers import pipeline as hf_pipeline
+    from transformers import AutoProcessor, AutoModelForImageTextToText
     import os as _os
-    _os.environ['HF_HUB_OFFLINE'] = '1'   # use cached weights only
+    _os.environ['HF_HUB_OFFLINE'] = '1'
 
-    _vlm_pipe = hf_pipeline(
-        'image-to-text',
-        model=VLM_MODEL,
-        torch_dtype=torch.float16,
-        device_map='auto',
+    _vlm_processor = AutoProcessor.from_pretrained(VLM_MODEL)
+    _vlm_model = AutoModelForImageTextToText.from_pretrained(
+        VLM_MODEL, torch_dtype=torch.float16, device_map='auto'
     )
+    _vlm_model.eval()
     print("VLM loaded.")
-    return _vlm_pipe
+    return _vlm_model, _vlm_processor
 
 
 def vlm_confirm(candidates, query, device):
@@ -123,7 +123,7 @@ def vlm_confirm(candidates, query, device):
     Returns (best_candidate_dict, explanation_str).
     LLaVA 1.5 takes one image at a time, so we query per candidate and pick best.
     """
-    pipe = load_vlm(device)
+    model, processor = load_vlm(device)
 
     valid_cands = [c for c in candidates if c['crop_path'] and os.path.exists(c['crop_path'])]
     if not valid_cands:
@@ -133,7 +133,7 @@ def vlm_confirm(candidates, query, device):
     best_reply = ""
     best_score = -1
 
-    for i, c in enumerate(valid_cands[:3]):
+    for c in valid_cands[:3]:
         try:
             img = Image.open(c['crop_path']).convert('RGB')
             max_sz = 512
@@ -147,27 +147,27 @@ def vlm_confirm(candidates, query, device):
         prompt = (
             f"USER: <image>\n"
             f"The user is searching for: \"{query}\"\n"
-            f"This image shows a {c['name']} detected in a room at position "
+            f"This image shows a {c['name']} at position "
             f"({c['tx']:.1f}, {c['ty']:.1f}, {c['tz']:.1f})m.\n"
             f"Does this image match what the user is looking for? "
             f"Answer YES or NO, then describe what you see in one sentence.\n"
             f"ASSISTANT:"
         )
 
-        out = pipe(img, prompt=prompt, generate_kwargs={
-            'max_new_tokens': 80,
-            'do_sample': False,
-        })
-        reply = out[0]['generated_text'].split('ASSISTANT:')[-1].strip()
+        inputs = processor(text=prompt, images=img, return_tensors='pt').to(model.device)
+        with torch.no_grad():
+            out_ids = model.generate(**inputs, max_new_tokens=80, do_sample=False)
+        # Decode only the newly generated tokens
+        new_ids = out_ids[0][inputs['input_ids'].shape[1]:]
+        reply = processor.decode(new_ids, skip_special_tokens=True).strip()
 
-        # Score: YES answer for correct class beats NO
         score = 1 if reply.upper().startswith('YES') else 0
         if score > best_score:
             best_score = score
             best_cand = c
             best_reply = reply
 
-    summary = f"[Option ranked by VLM] {best_cand['name']} in {best_cand['scene']}: {best_reply}"
+    summary = f"[VLM ranked] {best_cand['name']} in {best_cand['scene']}: {best_reply}"
     return best_cand, summary
 
 
@@ -303,13 +303,13 @@ def run_query(query, model, tokenizer, index, conn, device,
         print()
 
     if use_vlm and ranked:
-        print("── Gemma 3 visual confirmation ──────────────────────────────")
+        print("── LLaVA 1.5 visual confirmation ────────────────────────────")
         top_objs = [obj for _, obj in ranked[:3]]
         try:
             best, explanation = vlm_confirm(top_objs, query, device)
             print(f"\n  Best match : {best['name']} in {best['scene']}")
             print(f"  Position   : ({best['tx']:+.2f}, {best['ty']:+.2f}, {best['tz']:+.2f}) m")
-            print(f"\n  Gemma 3 says:\n  " +
+            print(f"\n  LLaVA says:\n  " +
                   textwrap.fill(explanation, width=72, subsequent_indent='  '))
         except Exception as e:
             print(f"  VLM error: {e}")
