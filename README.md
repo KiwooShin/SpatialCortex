@@ -94,12 +94,13 @@ SpatialCortex gives AR/VR devices (or robots) persistent spatial memory. On firs
 | **Per-snippet OBB visualization (fisheye + top-down, `visualize_efm3d_obbs.py`)** | ✅ Done |
 | **Scene-level OBB fusion (`fuse_scene_obbs.py`)** | ✅ Done |
 | **Scene top-down map (`scene_topdown.py`)** | ✅ Done |
+| **Best-view crop extraction per object (`extract_crops.py`)** | ✅ Done |
+| **CLIP ViT-L/14 embedding + FAISS index (`build_scene_db.py`)** | ✅ Done |
+| **Natural language query CLI (`query_scene.py`)** | ✅ Done |
 | 3D Gaussian Splatting reconstruction | 🔲 In progress |
+| Gemma 3 27B visual confirmation (`query_scene.py --vlm`) | 🔲 Needs model download |
 | Grounded-SAM 2 on registered frames (`run_gsam2.py`) | 🔲 In progress |
 | Depth Anything V2 + COLMAP scale calibration (`estimate_depth.py`) | 🔲 In progress |
-| 3D bbox lifting + projected cuboid visualization (`lift_to_3d.py`) | 🔲 In progress |
-| CLIP + FAISS spatial memory DB | 🔲 Planned |
-| Gemma 3 27B spatial query pipeline | 🔲 Planned |
 | Re-localization + navigation | 🔲 Planned |
 | End-to-end demo video | 🔲 Planned |
 
@@ -185,6 +186,69 @@ python scripts/detect_objects_3d.py \
   --save-masks  data/debug/masks \
   --save-depth  data/debug/depth
 ```
+
+### 6. Build the spatial memory database (CLIP + FAISS)
+
+Extracts a best-view RGB crop per detected object, encodes each with CLIP ViT-L/14, and stores everything in SQLite + a FAISS flat cosine index. All model weights are cached locally after the first run — no network calls during inference.
+
+```bash
+# Step A — extract best-view crops from VRS for each fused object
+conda activate efm3d
+python scripts/extract_crops.py \
+  --scene-obbs   output/efm3d_aeo_seq01/.../scene_obbs.csv \
+  --snippet-obbs output/efm3d_aeo_seq01/.../snippet_obbs.csv \
+  --vrs          data/aeo/aeo_seq01_.../main.vrs \
+  --traj         data/aeo/aeo_seq01_.../mps/slam/closed_loop_trajectory.csv \
+  --output-dir   output/crops/seq01 \
+  --scene-name   seq01
+
+# Step B — encode all crops and build the DB (run once for all scenes)
+python scripts/build_scene_db.py \
+  --crops output/efm3d_aeo_seq00/.../scene_obbs_crops.csv \
+          output/efm3d_aeo_seq01/.../scene_obbs_crops.csv \
+          output/efm3d_aeo_seq02/.../scene_obbs_crops.csv \
+  --db    data/scene_db.sqlite \
+  --faiss data/scene.faiss
+```
+
+### 7. Query the spatial memory
+
+```bash
+# Single query (CLIP retrieval only, fully local)
+python scripts/query_scene.py --query "where is the sofa"
+
+# Filter to one scene
+python scripts/query_scene.py --query "find me a lamp" --scene seq02
+
+# Interactive query loop
+python scripts/query_scene.py --interactive
+
+# With Gemma 3 visual confirmation (requires model download first)
+python scripts/query_scene.py --download-vlm   # one-time download
+python scripts/query_scene.py --query "where is the bed" --vlm
+```
+
+**Example output:**
+```
+Searching: "where is the sofa"
+
+  [1] SOFA
+      Scene     : seq01
+      Position  : (-1.45, -1.90, -1.09) m  (world XYZ)
+      Size      : 1.52×1.45×0.84 m
+      Confidence: 0.99  (50 observations fused)
+      Similarity: 0.217
+      Nearby    : cart, window, lamp, chair
+      Crop      : output/crops/seq01/004_sofa.jpg
+```
+
+**Retrieval design:**
+- CLIP ViT-L/14-quickgelu (OpenAI weights, fully local via HF cache)
+- Two-bucket ranking: objects whose class name appears in the query are surfaced first; CLIP cosine similarity breaks ties within each bucket
+- Synonym expansion: "sit" → chair/sofa, "sleep" → bed/sofa, "light" → lamp, etc.
+- Objects without a valid crop are stored in SQLite only (not in FAISS) to prevent text-embedding artifacts from polluting cosine search
+
+---
 
 ### 8. Launch the Three.js web viewer
 
@@ -303,7 +367,10 @@ SpatialCortex/
 │   ├── detect_objects_3d.py           # Full pipeline: SAM 2 + depth + 3D cuboid viz
 │   ├── visualize_efm3d_obbs.py        # EFM3D: fisheye + top-down per-frame viz
 │   ├── fuse_scene_obbs.py             # EFM3D: fuse snippet OBBs → scene_obbs.csv
-│   └── scene_topdown.py               # EFM3D: render single scene top-down map
+│   ├── scene_topdown.py               # EFM3D: render single scene top-down map
+│   ├── extract_crops.py               # Query pipeline: best-view crop per object
+│   ├── build_scene_db.py              # Query pipeline: CLIP embed → SQLite + FAISS
+│   └── query_scene.py                 # Query pipeline: NL query → 3D location
 └── data/                              # gitignored — generated files go here
     ├── colmap/                         # COLMAP output (images + sparse/0/)
     ├── gaussian_output/                # 3DGS training output

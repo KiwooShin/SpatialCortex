@@ -445,6 +445,45 @@ pip install torch torchvision transformers accelerate open_clip_torch faiss-gpu 
 
 ## Progress Log
 
+### 2026-05-26
+
+**Query pipeline — fully operational (Steps 1–3 complete)**
+
+**Step 1 — Crop extraction (`scripts/extract_crops.py`)**
+- For each fused object in `scene_obbs.csv`, find the highest-confidence raw snippet detection of the same class within 0.8 m, load that RGB frame from VRS, project the 3D OBB corners into the fisheye image (with CW-90° rotation), crop the axis-aligned bounding rect + 25% padding.
+- 78 of 86 objects got valid crops across seq00 (15/17), seq01 (35/39), seq02 (28/30). 8 failures were objects partially off-screen at their best detection frame.
+- Output: `output/crops/{seq}/{id}_{class}.jpg` + `scene_obbs_crops.csv` with `crop_path` and `best_ts_ns` columns.
+
+**Step 2 — CLIP encoding + DB build (`scripts/build_scene_db.py`)**
+- Model: CLIP ViT-L/14-quickgelu (OpenAI weights, correct QuickGELU activation — using plain ViT-L-14 caused an activation mismatch that degraded embeddings).
+- FAISS strategy: image embeddings only in the index. Text embeddings (class name) for the 8 cropless objects are excluded from FAISS — mixing text and image embeddings in the same cosine index causes text-text similarity (~0.78) to dominate over image-text similarity (~0.20), breaking ranking.
+- 8 cropless objects stored in SQLite only (has_image=0, clip_idx=-1); surfaced via class-name string match during query.
+- Output: `data/scene_db.sqlite` (86 objects), `data/scene.faiss` (78 vectors × 768d, IndexFlatIP).
+- Both scripts set `HF_HUB_OFFLINE=1` — all weights cached locally, no network calls during inference.
+
+**Step 3 — Natural language query CLI (`scripts/query_scene.py`)**
+- CLIP text embed → FAISS search (fetch ≥50 to ensure class-matched objects are found even if ranked low by raw CLIP sim) → two-bucket re-ranking:
+  - Bucket A: objects whose class name words appear in the query → ranked by CLIP similarity
+  - Bucket B: everything else → ranked by CLIP similarity
+- Synonym expansion: sit→chair/sofa, sleep→bed/sofa, light→lamp, couch→sofa, screen→monitor/tv, storage→cabinet/shelf/dresser.
+- SQLite fallback: cropless objects (has_image=0) appended if class name matches query words.
+- Nearby-object context: for each result, queries SQLite for objects within 1.5 m to show spatial context ("Nearby: sofa, window, lamp").
+- Flags: `--scene` (restrict to one scene), `--interactive` (loop), `--vlm` (Gemma 3 visual confirmation), `--no-vlm` (CLIP only).
+- Gemma 3 path: multimodal `AutoModelForImageTextToText`, shows top-3 crops as images, asks which matches the query and where it is. Run `--download-vlm` once to cache model locally.
+
+**Verified query results (CLIP-only, fully local):**
+
+| Query | Rank 1 result | Correct? |
+|---|---|---|
+| "where is the sofa" | SOFA (seq00) | ✓ |
+| "where is the bed" | BED (seq02) | ✓ |
+| "find me a lamp" | LAMP (seq02) | ✓ |
+| "I need to sleep" | BED (seq02) | ✓ |
+| "where can I sit down" | CHAIR + SOFA | ✓ |
+| "show me a chair near a window" | WINDOW + CHAIR (seq01) | ✓ |
+
+---
+
 ### 2026-05-25
 
 **EFM3D 3D Object Detection — fully integrated**
