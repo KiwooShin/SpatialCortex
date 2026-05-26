@@ -28,34 +28,38 @@ import pandas as pd
 import torch
 from PIL import Image
 
-CLIP_MODEL  = 'ViT-L-14'
+CLIP_MODEL  = 'ViT-L-14-quickgelu'   # OpenAI CLIP uses QuickGELU; avoids activation mismatch
 CLIP_PRETRAINED = 'openai'
 EMBED_DIM   = 768   # ViT-L-14 output dimension
+
+# Run fully offline — weights already cached by first run of build_scene_db.py
+os.environ.setdefault('HF_HUB_OFFLINE', '1')
 
 
 # ── Database setup ────────────────────────────────────────────────────────────
 
 DDL = """
 CREATE TABLE IF NOT EXISTS objects (
-    id        INTEGER PRIMARY KEY AUTOINCREMENT,
-    scene     TEXT    NOT NULL,
-    obj_id    INTEGER NOT NULL,
-    name      TEXT    NOT NULL,
-    prob      REAL,
-    count     INTEGER,
-    tx        REAL,
-    ty        REAL,
-    tz        REAL,
-    qw        REAL,
-    qx        REAL,
-    qy        REAL,
-    qz        REAL,
-    scale_x   REAL,
-    scale_y   REAL,
-    scale_z   REAL,
-    crop_path TEXT,
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    scene      TEXT    NOT NULL,
+    obj_id     INTEGER NOT NULL,
+    name       TEXT    NOT NULL,
+    prob       REAL,
+    count      INTEGER,
+    tx         REAL,
+    ty         REAL,
+    tz         REAL,
+    qw         REAL,
+    qx         REAL,
+    qy         REAL,
+    qz         REAL,
+    scale_x    REAL,
+    scale_y    REAL,
+    scale_z    REAL,
+    crop_path  TEXT,
     best_ts_ns INTEGER,
-    clip_idx  INTEGER
+    clip_idx   INTEGER,     -- row index in FAISS; -1 means no image embedding
+    has_image  INTEGER      -- 1 if crop was successfully embedded, 0 otherwise
 );
 """
 
@@ -67,19 +71,19 @@ def init_db(db_path: str) -> sqlite3.Connection:
     return conn
 
 
-def insert_object(conn, row: dict, clip_idx: int):
+def insert_object(conn, row: dict, clip_idx: int, has_image: int):
     conn.execute("""
         INSERT INTO objects
             (scene, obj_id, name, prob, count,
              tx, ty, tz, qw, qx, qy, qz,
              scale_x, scale_y, scale_z,
-             crop_path, best_ts_ns, clip_idx)
+             crop_path, best_ts_ns, clip_idx, has_image)
         VALUES
             (:scene, :obj_id, :name, :prob, :count,
              :tx, :ty, :tz, :qw, :qx, :qy, :qz,
              :scale_x, :scale_y, :scale_z,
-             :crop_path, :best_ts_ns, :clip_idx)
-    """, {**row, 'clip_idx': clip_idx})
+             :crop_path, :best_ts_ns, :clip_idx, :has_image)
+    """, {**row, 'clip_idx': clip_idx, 'has_image': has_image})
 
 
 # ── CLIP encoding ─────────────────────────────────────────────────────────────
@@ -155,20 +159,6 @@ def main():
         for _, row in df.iterrows():
             crop_path = str(row.get('crop_path', ''))
 
-            # Objects without a valid crop get a text-only embedding from class name
-            if not crop_path or not os.path.exists(crop_path):
-                print(f"  [{int(row['obj_id']):03d}] {row['name']:20s}  no crop → text embedding")
-                emb = encode_text(model, tokenizer, row['name'], args.device)
-            else:
-                emb = encode_image(model, preprocess, crop_path, args.device)
-                if emb is None:
-                    total_skipped += 1
-                    continue
-                print(f"  [{int(row['obj_id']):03d}] {row['name']:20s}  {crop_path.split('/')[-1]}")
-
-            clip_idx = index.ntotal
-            index.add(emb.reshape(1, -1).astype(np.float32))
-
             rec = {
                 'scene':      scene,
                 'obj_id':     int(row['obj_id']),
@@ -188,16 +178,37 @@ def main():
                 'crop_path':  crop_path,
                 'best_ts_ns': int(row['best_ts_ns']) if 'best_ts_ns' in row else -1,
             }
-            insert_object(conn, rec, clip_idx)
+
+            if not crop_path or not os.path.exists(crop_path):
+                # No valid crop — store in SQLite only, skip FAISS
+                # (mixing text embeddings with image embeddings breaks cosine ranking)
+                print(f"  [{int(row['obj_id']):03d}] {row['name']:20s}  no crop → SQLite only (no FAISS entry)")
+                insert_object(conn, rec, clip_idx=-1, has_image=0)
+                total_inserted += 1
+                continue
+
+            emb = encode_image(model, preprocess, crop_path, args.device)
+            if emb is None:
+                insert_object(conn, rec, clip_idx=-1, has_image=0)
+                total_skipped += 1
+                continue
+
+            print(f"  [{int(row['obj_id']):03d}] {row['name']:20s}  {crop_path.split('/')[-1]}")
+            clip_idx = index.ntotal
+            index.add(emb.reshape(1, -1).astype(np.float32))
+            insert_object(conn, rec, clip_idx=clip_idx, has_image=1)
             total_inserted += 1
 
     conn.commit()
-    conn.close()
 
     faiss.write_index(index, args.faiss)
 
     print(f"\n{'─'*50}")
+    with_image = conn.execute('SELECT COUNT(*) FROM objects WHERE has_image=1').fetchone()[0]
+    conn.close()
     print(f"Objects inserted : {total_inserted}")
+    print(f"  with image embed: {with_image}  (in FAISS)")
+    print(f"  text-only (SQLite only): {total_inserted - with_image}")
     print(f"Objects skipped  : {total_skipped}")
     print(f"FAISS index size : {index.ntotal} vectors × {EMBED_DIM}d")
     print(f"SQLite DB        : {args.db}")
