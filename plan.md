@@ -103,9 +103,10 @@ swap COLMAP poses for ORB-SLAM3 poses, keep everything else unchanged.
 | Layer | Technology | Why it's impressive |
 |---|---|---|
 | Scene reconstruction | **3D Gaussian Splatting** (3DGS) | State-of-the-art novel view synthesis; visually stunning |
-| 2D segmentation | **Grounded-SAM 2** (Grounding DINO + SAM 2) | Open-vocabulary, zero-shot object masking |
+| 2D segmentation | **Grounded-SAM 2** (Grounding DINO + SAM 2) | Open-vocabulary, zero-shot object masking; still SOTA for 2D-first detection as of 2025 |
 | 3D object lifting | **Depth unprojection + mask fusion** | Converts 2D masks → 3D bounding volumes in SLAM frame |
 | Semantic indexing | **CLIP ViT-L/14 embeddings + FAISS** | Sub-millisecond vector search over object crops |
+| *(Stretch)* Language 3D field | **LangSplat / LangSplatV2** | Embeds CLIP features directly into 3D Gaussians — replaces CLIP+FAISS with native language-queryable 3D space; 199× faster than LERF |
 | Spatial VLM | **Gemma 3 27B** (vision-language, on DGX Spark) | On-device, no API, full control; latest Google model |
 | Spatial DB | **SQLite + FAISS index** | Lightweight, portable, no infra overhead |
 | Visualization | **Three.js** (web) + **Rerun.io** (real-time) | Interactive 3D map for demo; Rerun used by FAIR/DeepMind |
@@ -128,10 +129,14 @@ swap COLMAP poses for ORB-SLAM3 poses, keep everything else unchanged.
 - *(Future)* Swap COLMAP poses for ORB-SLAM3 loop-closed trajectory (Phase 2 SLAM)
 
 ### Day 3 — Open-Vocabulary 3D Object Detection
-- Run **Grounded-SAM 2** on all SLAM keyframes with a broad text prompt ("all objects")
+- Run **Grounded-SAM 2** on all SLAM keyframes with kitchen-specific text prompt
+  (e.g. "dishes, toaster, sink, faucet, cooker, mug, bowl, knife, bottle")
 - Per keyframe: produce per-object masks + class labels + confidence scores
 - Unproject each 2D mask into 3D using depth map + camera intrinsics/extrinsics from Aria calibration
 - Output: list of 3D bounding boxes with class labels, one per detected object
+- *(Stretch — if 3DGS is trained by end of Day 2)* Run **LangSplat** on the Gaussian output:
+  encodes CLIP features into each Gaussian so objects can be queried natively in 3D space,
+  replacing the separate CLIP+FAISS step below with a single language-queryable 3D field
 
 ### Day 4 — Spatial Scene Graph
 - Merge duplicate detections across keyframes (IoU in 3D + NMS)
@@ -351,8 +356,38 @@ python metrics.py -m ~/SpatialCortex/data/gaussian_output
 ## Key Research Concepts Featured
 
 - **3D Gaussian Splatting** (Kerbl et al., ICCV 2023 best paper) — scene representation
-- **Grounded-SAM 2** (Meta AI, 2024) — open-vocabulary 2D/3D segmentation
+- **EFM3D / EVL** (Meta Reality Labs, 2024) — egocentric voxel lifting for 3D OBB detection; current primary detection backbone
+- **Grounded-SAM 2** (Meta AI, 2024) — open-vocabulary 2D segmentation + video tracking; chosen over 2025 alternatives (Mosaic3D, OpenYOLO3D, SceneSplat) for lower pipeline complexity and faster time-to-demo
+- **LangSplat / LangSplatV2** (CVPR 2024 / 2025) — stretch goal; embeds language into 3D Gaussians for native language-queryable scene representation
+- **DUSt3R / MASt3R** (CVPR 2024 / NAVER Labs 2024) — feed-forward multi-view 3D reconstruction without calibration; potential COLMAP replacement
+- **OpenMask3D / ConceptFusion / OpenScene** — open-vocabulary 3D scene understanding via multi-view CLIP fusion; next step after EFM3D
 - **Embodied VLM querying** — spatial grounding with Gemma 3 27B multimodal
 - **Scene graph memory** — structured persistent spatial representation
 - **Lifelong localization** — reuse of a stored map across sessions
 - **FAISS vector retrieval** — scalable semantic search over visual memory
+
+---
+
+## Progress Log
+
+### 2026-05-25
+
+**EFM3D 3D Object Detection — fully integrated**
+
+- Downloaded AEO dataset sequences seq01 (living room) and seq02 (bedroom) in addition to previously available seq00.
+- Ran EFM3D inference with `--snip_stride 2.0` for full sequence coverage (~50 snippets each) on all three sequences. Previous seq00 run used only 30 snippets (2.7% coverage); new runs cover the full sequence.
+- Investigated model inputs: EFM3D uses **RGB only** (`video_streams: [rgb]`). SLAM cameras are loaded for timestamp intersection only. Semidense SLAM points are used as occupancy + freespace voxel channels. Fixed voxel extent `[-2,2,0,4,-2,2]` m; vol_min/max from semidense quantiles are computed but not consumed by the model.
+- Identified that `track_obbs()` is blocked by `pytorch3d` (unavailable on aarch64/CUDA 13.0). Written `scripts/fuse_scene_obbs.py` as a drop-in replacement: greedy center-distance clustering per class → confidence-weighted position/log-scale averaging → Markley quaternion mean → accumulated evidence confidence → `scene_obbs.csv`.
+- Fused scene maps: seq00 = 17 objects, seq01 = 39 objects, seq02 = 30 objects.
+
+**Visualization improvements**
+
+- Fixed Aria RGB 90° rotation: raw sensor image is 90° CCW from upright. Applied CW 90° rotation to both image array and projected pixel coordinates via `(N-1-v, u)` transform. Both fisheye projection and corner drawing are now geometrically correct.
+- Added top-down bird's-eye view alongside fisheye overlay (side-by-side output per frame) in `visualize_efm3d_obbs.py`.
+- Written `scripts/scene_topdown.py`: renders a single top-down scene map from `scene_obbs.csv`, auto-scaled to cover all objects + full camera trajectory. Generated maps for seq00/01/02.
+
+**Research review**
+
+- Reviewed cross-frame consistency approaches: StreamPETR (temporal memory queue), OpenMask3D (multi-view CLIP fusion on 3D masks), ConceptFusion (per-point CLIP accumulation), LangSplat/LERF (language-embedded scene representations).
+- Identified DUSt3R (CVPR 2024, arXiv 2312.14132) and MASt3R (arXiv 2406.09756) as direct replacements for COLMAP that work from uncalibrated images; MASt3R adds a dense matching head on top of DUSt3R.
+- Added `research.md` with detailed summaries of all related works.

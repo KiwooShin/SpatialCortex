@@ -34,3 +34,13 @@ Thumbs.db
 *.vrs
 *.csv.gz
 *.rrd
+
+# Model inference output (large CSVs, JPEGs, pickle caches)
+output/
+
+# AEO dataset sequences
+data/aeo/
+
+# Dataset download manifests (contain signed CDN URLs — do not commit)
+AEO_download_urls.json
+*_download_urls.json
