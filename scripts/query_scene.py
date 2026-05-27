@@ -41,7 +41,7 @@ CLIP_PRETRAINED = 'openai'
 DEFAULT_DB      = 'data/scene_db.sqlite'
 DEFAULT_FAISS   = 'data/scene.faiss'
 DEFAULT_TOP_K   = 5
-VLM_MODEL       = 'llava-hf/llava-1.5-7b-hf'   # no HF token required; swap to google/gemma-3-27b-it for highest quality
+VLM_MODEL       = 'llava-hf/llava-1.5-7b-hf'
 
 
 # ── CLIP ─────────────────────────────────────────────────────────────────────

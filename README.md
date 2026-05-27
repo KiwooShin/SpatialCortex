@@ -98,7 +98,7 @@ SpatialCortex gives AR/VR devices (or robots) persistent spatial memory. On firs
 | **CLIP ViT-L/14 embedding + FAISS index (`build_scene_db.py`)** | ✅ Done |
 | **Natural language query CLI (`query_scene.py`)** | ✅ Done |
 | **3D Gaussian Splatting reconstruction** | ✅ Done (30k iter, 210 MB `.ply` + flythrough) |
-| LLaVA 1.5 7B visual confirmation (`query_scene.py --vlm`) | 🔲 Model downloading |
+| **Visual query — full frame + 3D boxes + LLaVA (`query_visual.py`)** | ✅ Done |
 | Grounded-SAM 2 on registered frames (`run_gsam2.py`) | 🔲 In progress |
 | Depth Anything V2 + COLMAP scale calibration (`estimate_depth.py`) | 🔲 In progress |
 | Re-localization + navigation | 🔲 Planned |
@@ -227,6 +227,48 @@ python scripts/query_scene.py --interactive
 python scripts/query_scene.py --download-vlm   # one-time download (~13 GB)
 python scripts/query_scene.py --query "where is the bed" --vlm
 ```
+
+### 8. Visual query — full frame + 3D bounding boxes + LLaVA
+
+Ask a question; get back the actual video frame where the object was best seen, with 3D bounding boxes projected onto it and a natural language description from LLaVA.
+
+```bash
+conda activate efm3d
+
+# Single query — saves annotated frame to output/query_result.jpg
+python scripts/query_visual.py --query "where is the sofa" --vlm
+
+# Custom output path
+python scripts/query_visual.py --query "where is the bed" --out output/query_bed.jpg --vlm
+
+# Filter to one scene
+python scripts/query_visual.py --query "find me a lamp" --scene seq02 --vlm
+
+# Interactive loop (saves query_result_000.jpg, _001.jpg, …)
+python scripts/query_visual.py --interactive --vlm
+
+# Without VLM — programmatic answer only, much faster
+python scripts/query_visual.py --query "where is the chair"
+```
+
+**Example output:**
+```
+── Answer ─────────────────────────────────────────────────────
+  Object   : BED
+  Scene    : seq02
+  Frame ts : 245288370176  (245.288 s into recording)
+  Position : (-1.48, -1.09, -1.07) m
+  Nearby   : container, table, window, lamp, chair
+  Image    : output/query_bed.jpg
+
+  LLaVA: "The bed is in the center of the room, surrounded by a container,
+           table, window, lamp, and chair."
+```
+
+The annotated frame shows:
+- **White box** with `>>> OBJECT <<<` label + arrow → the queried object (fused scene position)
+- **Coloured boxes** (class colours) → context objects detected in the same snippet
+- **Banner** at top → scene name, timestamp, query target
 
 **Example output:**
 ```
@@ -370,7 +412,8 @@ SpatialCortex/
 │   ├── scene_topdown.py               # EFM3D: render single scene top-down map
 │   ├── extract_crops.py               # Query pipeline: best-view crop per object
 │   ├── build_scene_db.py              # Query pipeline: CLIP embed → SQLite + FAISS
-│   └── query_scene.py                 # Query pipeline: NL query → 3D location
+│   ├── query_scene.py                 # Query pipeline: NL query → 3D location (text output)
+│   └── query_visual.py                # Visual query: NL query → annotated VRS frame + LLaVA
 └── data/                              # gitignored — generated files go here
     ├── colmap/                         # COLMAP output (images + sparse/0/)
     ├── gaussian_output/                # 3DGS training output

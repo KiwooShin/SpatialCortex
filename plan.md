@@ -495,6 +495,36 @@ pip install torch torchvision transformers accelerate open_clip_torch faiss-gpu 
 | "where can I sit down" | CHAIR + SOFA | ✓ |
 | "show me a chair near a window" | WINDOW + CHAIR (seq01) | ✓ |
 
+**Visual query pipeline — `scripts/query_visual.py` (Step 4 complete)**
+
+Full end-to-end: natural language → CLIP retrieval → full VRS frame with 3D OBBs drawn → LLaVA visual description.
+
+- Flow: CLIP text embed → FAISS top-k → SQLite best match → load full RGB frame from VRS at `best_ts_ns` → project 3D OBBs of target (white highlight, thick border, `>>> NAME <<<` label + arrow) + context objects (class colors, thin) → feed annotated frame to LLaVA 1.5 7B → structured answer.
+- LLaVA download confirmed complete: 14 GB cached at `~/.cache/huggingface/hub/models--llava-hf--llava-1.5-7b-hf/`.
+- Fixed ranking bug: original code used substring matching (`"a" in "ladder"` → True), causing "find me a lamp" to return LADDER. Fixed to exact word-level matching (`name_words & qwords`).
+- Output format (always printed, VLM appended when `--vlm`):
+  ```
+  ── Answer ─────────────────────────────────────────────────────
+    Object   : BED
+    Scene    : seq02
+    Frame ts : 245288370176  (245.288 s into recording)
+    Position : (-1.48, -1.09, -1.07) m
+    Nearby   : container, table, window, lamp, chair
+    Image    : output/query_bed.jpg
+
+    LLaVA: "The bed is in the center of the room, surrounded by a container,
+             table, window, lamp, and chair."
+  ```
+- Annotated frames saved to `output/query_result.jpg` (or `--out` path).
+
+**Verified visual query results (LLaVA + annotated frame):**
+
+| Query | Found | LLaVA answer |
+|---|---|---|
+| "where is the sofa" | SOFA seq00 | "The sofa is located in the center of the room, surrounded by a chair, a lamp, a ladder, and a picture frame." |
+| "where is the bed" | BED seq02 | "The bed is in the center of the room, surrounded by a container, table, window, lamp, and chair." |
+| "find me a lamp" | LAMP seq02 | "The lamp is located in the corner of the room, surrounded by a chair, table, and a flower pot." |
+
 ---
 
 ### 2026-05-25
