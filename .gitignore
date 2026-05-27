@@ -18,6 +18,9 @@ data/colmap_*/
 # 3DGS training output (large .ply, renders, etc.)
 data/gaussian_output/
 
+# Visualization frames (generated output)
+data/visualizations/
+
 # Keyframes are tracked (small JPEGs for demo)
 # data/keyframes/ is intentionally NOT ignored
 

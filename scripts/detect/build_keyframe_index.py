@@ -15,9 +15,11 @@ Usage:
     # Output: data/keyframe_index.faiss + data/keyframe_index.csv (~30 s)
 """
 
-import os, sys
-from bisect import bisect_left
+import os
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 os.environ.setdefault('HF_HUB_OFFLINE', '1')
 
@@ -30,60 +32,13 @@ import torch
 from PIL import Image
 
 from projectaria_tools.core import data_provider, sensor_data
-from projectaria_tools.core.stream_id import StreamId
 
-BASE    = Path(__file__).parent.parent
-RGB_SID = StreamId(214, 1)
+from spatialcortex.config import BASE, RGB_SID, SCENES, CLIP_MODEL, CLIP_PRETRAINED, KEYFRAME_FAISS, KEYFRAME_CSV
+from spatialcortex.geometry import quat_to_rotmat, load_trajectory, interp_pose
 
-CLIP_MODEL      = 'ViT-L-14-quickgelu'
-CLIP_PRETRAINED = 'openai'
-STRIDE          = 10      # sample every Nth frame (~1 fps at 10fps RGB)
-OUT_FAISS       = BASE / 'data/keyframe_index.faiss'
-OUT_CSV         = BASE / 'data/keyframe_index.csv'
-
-SCENES = {
-    "seq00": {
-        "vrs":  BASE / "data/aeo/aeo_seq00_173376298563204/main.vrs",
-        "traj": BASE / "data/aeo/aeo_seq00_173376298563204/mps/mps/slam/closed_loop_trajectory.csv",
-    },
-    "seq01": {
-        "vrs":  BASE / "data/aeo/aeo_seq01_208838848508107/main.vrs",
-        "traj": BASE / "data/aeo/aeo_seq01_208838848508107/mps/slam/closed_loop_trajectory.csv",
-    },
-    "seq02": {
-        "vrs":  BASE / "data/aeo/aeo_seq02_181771578105956/main.vrs",
-        "traj": BASE / "data/aeo/aeo_seq02_181771578105956/mps/slam/closed_loop_trajectory.csv",
-    },
-}
-
-# ── Trajectory ─────────────────────────────────────────────────────────────────
-
-def quat_to_rotmat(qw, qx, qy, qz):
-    n = np.sqrt(qw**2+qx**2+qy**2+qz**2)
-    qw,qx,qy,qz = qw/n,qx/n,qy/n,qz/n
-    return np.array([
-        [1-2*(qy**2+qz**2), 2*(qx*qy-qz*qw), 2*(qx*qz+qy*qw)],
-        [2*(qx*qy+qz*qw), 1-2*(qx**2+qz**2), 2*(qy*qz-qx*qw)],
-        [2*(qx*qz-qy*qw), 2*(qy*qz+qx*qw), 1-2*(qx**2+qy**2)],
-    ])
-
-def load_trajectory(traj_csv):
-    df = pd.read_csv(traj_csv)
-    times_us = df["tracking_timestamp_us"].values.astype(np.int64)
-    poses = []
-    for _, row in df.iterrows():
-        poses.append({
-            "tx": row["tx_world_device"], "ty": row["ty_world_device"],
-            "tz": row["tz_world_device"],
-            "qw": row["qw_world_device"], "qx": row["qx_world_device"],
-            "qy": row["qy_world_device"], "qz": row["qz_world_device"],
-        })
-    return times_us, poses
-
-def interp_pose(times_us, poses, query_ns):
-    query_us = query_ns // 1000
-    idx = min(max(bisect_left(times_us, query_us), 0), len(times_us)-1)
-    return poses[idx]
+STRIDE    = 10      # sample every Nth frame (~1 fps at 10fps RGB)
+OUT_FAISS = KEYFRAME_FAISS
+OUT_CSV   = KEYFRAME_CSV
 
 # ── CLIP encoder ───────────────────────────────────────────────────────────────
 
@@ -116,7 +71,7 @@ def main():
 
     for scene, paths in SCENES.items():
         print(f"\n── {scene} ─────────────────────────────────────────────────")
-        times_us, poses = load_trajectory(str(paths['traj']))
+        times_us, Rs_traj, ts_pos_traj = load_trajectory(str(paths['traj']))
 
         provider  = data_provider.create_vrs_data_provider(str(paths['vrs']))
         ts_all    = provider.get_timestamps_ns(RGB_SID, sensor_data.TimeDomain.DEVICE_TIME)
@@ -146,7 +101,9 @@ def main():
 
             img_pil = Image.fromarray(arr)
             emb = encode_image(model, preprocess, img_pil, device)
-            pose = interp_pose(times_us, poses, int(ts_ns))
+            R_frame, t_frame = interp_pose(times_us, Rs_traj, ts_pos_traj, int(ts_ns))
+            pose = {"tx": t_frame[0], "ty": t_frame[1], "tz": t_frame[2],
+                    "qw": 1.0, "qx": 0.0, "qy": 0.0, "qz": 0.0}
 
             all_embeddings.append(emb)
             all_meta.append({

@@ -15,85 +15,17 @@ Usage:
 
 import argparse
 import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 import cv2
 import numpy as np
 import pandas as pd
 
-# ── OBB edge connectivity ─────────────────────────────────────────────────────
-BB3D_LINE_ORDERS = [
-    [0, 1], [1, 2], [2, 3], [3, 0],
-    [4, 5], [5, 6], [6, 7], [7, 4],
-    [0, 4], [1, 5], [2, 6], [3, 7],
-]
-
-# ── Class colours (SSI_SEM_COLORS, RGB 0-1) ───────────────────────────────────
-_SSI_RGB = {
-    "chair":         (0.20, 0.60, 1.00),
-    "sofa":          (0.10, 0.50, 0.10),
-    "table":         (1.00, 1.00, 0.00),
-    "shelf":         (0.50, 0.00, 0.50),
-    "lamp":          (1.00, 0.80, 0.25),
-    "bed":           (0.90, 0.40, 0.60),
-    "monitor":       (0.00, 0.80, 0.80),
-    "ladder":        (0.50, 0.80, 0.30),
-    "container":     (0.80, 0.50, 0.20),
-    "mirror":        (0.60, 0.70, 1.00),
-    "cabinet":       (0.80, 0.60, 0.20),
-    "tv":            (0.30, 0.90, 0.70),
-    "plant":         (0.20, 0.80, 0.20),
-    "microwave":     (1.00, 0.40, 0.40),
-    "refrigerator":  (0.40, 0.40, 1.00),
-    "oven":          (0.70, 0.60, 0.30),
-    "whiteboard":    (0.90, 0.90, 0.70),
-    "curtain":       (0.70, 0.50, 1.00),
-    "window":        (0.70, 0.90, 1.00),
-    "door":          (0.80, 0.70, 0.60),
-    "picture_frame": (1.00, 0.60, 0.20),
-    "floor_mat":     (0.60, 0.40, 0.20),
-    "trash_can":     (0.50, 0.50, 0.50),
-    "book":          (0.90, 0.70, 0.40),
-    "bottle":        (0.40, 0.80, 0.60),
-    "pillow":        (0.95, 0.65, 0.80),
-    "exercise_weight": (0.60, 0.30, 0.10),
-    "flower_pot":    (0.20, 0.70, 0.30),
-    "dresser":       (0.70, 0.55, 0.35),
-    "mount":         (0.55, 0.55, 0.55),
-    "cart":          (0.80, 0.80, 0.30),
-}
-_DEFAULT_RGB = (0.70, 0.70, 0.70)
-
-
-def _bgr255(r, g, b):
-    return (int(b * 255), int(g * 255), int(r * 255))
-
-
-def get_color(name: str):
-    return _bgr255(*_SSI_RGB.get(name.lower(), _DEFAULT_RGB))
-
-
-# ── Geometry ──────────────────────────────────────────────────────────────────
-
-def quat_to_rotmat(qw, qx, qy, qz) -> np.ndarray:
-    n = np.sqrt(qw**2 + qx**2 + qy**2 + qz**2)
-    qw, qx, qy, qz = qw/n, qx/n, qy/n, qz/n
-    return np.array([
-        [1-2*(qy**2+qz**2),  2*(qx*qy-qz*qw),  2*(qx*qz+qy*qw)],
-        [2*(qx*qy+qz*qw),  1-2*(qx**2+qz**2),  2*(qy*qz-qx*qw)],
-        [2*(qx*qz-qy*qw),  2*(qy*qz+qx*qw),  1-2*(qx**2+qy**2)],
-    ])
-
-
-def obb_corners_world(tx, ty, tz, qw, qx, qy, qz, sx, sy, sz) -> np.ndarray:
-    """8 OBB corners in world space. sx/sy/sz are FULL dimensions."""
-    R = quat_to_rotmat(qw, qx, qy, qz)
-    center = np.array([tx, ty, tz])
-    hx, hy, hz = sx / 2.0, sy / 2.0, sz / 2.0
-    xs, ys, zs = [-hx, hx], [-hy, hy], [-hz, hz]
-    ids = [(0,0,0),(1,0,0),(1,1,0),(0,1,0),
-           (0,0,1),(1,0,1),(1,1,1),(0,1,1)]
-    corners_obj = np.array([[xs[xi], ys[yi], zs[zi]] for xi, yi, zi in ids])
-    return center + corners_obj @ R.T   # (8, 3)
+from spatialcortex.geometry import obb_corners_world
+from spatialcortex.drawing import get_color
 
 
 # ── Legend ────────────────────────────────────────────────────────────────────

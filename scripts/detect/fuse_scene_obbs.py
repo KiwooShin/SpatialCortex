@@ -21,9 +21,15 @@ No pytorch3d required.  Replaces the EFM3D track_obbs() whose dependency
 
 import argparse
 import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 import numpy as np
 import pandas as pd
+
+from spatialcortex.geometry import quat_to_rotmat
 
 
 # ── Quaternion helpers ────────────────────────────────────────────────────────
@@ -51,14 +57,6 @@ def quat_mean(qs: np.ndarray, weights: np.ndarray) -> np.ndarray:
     return q_mean / np.linalg.norm(q_mean)
 
 
-def quat_to_rotmat(qw, qx, qy, qz) -> np.ndarray:
-    n = np.sqrt(qw**2 + qx**2 + qy**2 + qz**2)
-    qw, qx, qy, qz = qw/n, qx/n, qy/n, qz/n
-    return np.array([
-        [1-2*(qy**2+qz**2),  2*(qx*qy-qz*qw),  2*(qx*qz+qy*qw)],
-        [2*(qx*qy+qz*qw),  1-2*(qx**2+qz**2),  2*(qy*qz-qx*qw)],
-        [2*(qx*qz-qy*qw),  2*(qy*qz+qx*qw),  1-2*(qx**2+qy**2)],
-    ])
 
 
 def center_dist(row_a, row_b) -> float:

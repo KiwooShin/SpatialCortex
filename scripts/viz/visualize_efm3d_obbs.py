@@ -17,182 +17,19 @@ Correctness notes:
 import argparse
 import os
 import sys
-from bisect import bisect_left
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 import cv2
 import numpy as np
 import pandas as pd
 
 from projectaria_tools.core import data_provider, sensor_data
-from projectaria_tools.core.stream_id import StreamId
 
-RGB_SID = StreamId(214, 1)
-
-# ── Edge connectivity (BB3D_LINE_ORDERS from efm3d) ───────────────────────────
-BB3D_LINE_ORDERS = [
-    [0, 1], [1, 2], [2, 3], [3, 0],   # bottom face ring
-    [4, 5], [5, 6], [6, 7], [7, 4],   # top face ring
-    [0, 4], [1, 5], [2, 6], [3, 7],   # vertical pillars
-]
-
-# ── Canonical EFM3D class colors (SSI_SEM_COLORS) ────────────────────────────
-_SSI_RGB = {
-    "chair":        (0.20, 0.60, 1.00),
-    "sofa":         (0.10, 0.50, 0.10),
-    "table":        (1.00, 1.00, 0.00),
-    "shelf":        (0.50, 0.00, 0.50),
-    "lamp":         (1.00, 0.80, 0.25),
-    "bed":          (0.90, 0.40, 0.60),
-    "monitor":      (0.00, 0.80, 0.80),
-    "ladder":       (0.50, 0.80, 0.30),
-    "container":    (0.80, 0.50, 0.20),
-    "mirror":       (0.60, 0.70, 1.00),
-    "cabinet":      (0.80, 0.60, 0.20),
-    "tv":           (0.30, 0.90, 0.70),
-    "plant":        (0.20, 0.80, 0.20),
-    "microwave":    (1.00, 0.40, 0.40),
-    "refrigerator": (0.40, 0.40, 1.00),
-    "oven":         (0.70, 0.60, 0.30),
-    "whiteboard":   (0.90, 0.90, 0.70),
-    "curtain":      (0.70, 0.50, 1.00),
-    "window":       (0.70, 0.90, 1.00),
-    "door":         (0.80, 0.70, 0.60),
-    "picture_frame":(1.00, 0.60, 0.20),
-    "floor_mat":    (0.60, 0.40, 0.20),
-    "trash_can":    (0.50, 0.50, 0.50),
-    "book":         (0.90, 0.70, 0.40),
-    "bottle":       (0.40, 0.80, 0.60),
-}
-_DEFAULT_RGB = (0.70, 0.70, 0.70)
-
-
-def _bgr255(r, g, b):
-    return (int(b * 255), int(g * 255), int(r * 255))
-
-
-def get_color(name: str):
-    return _bgr255(*_SSI_RGB.get(name.lower(), _DEFAULT_RGB))
-
-
-# ── Geometry ──────────────────────────────────────────────────────────────────
-
-def quat_to_rotmat(qw, qx, qy, qz) -> np.ndarray:
-    n = np.sqrt(qw**2 + qx**2 + qy**2 + qz**2)
-    qw, qx, qy, qz = qw/n, qx/n, qy/n, qz/n
-    return np.array([
-        [1-2*(qy**2+qz**2),  2*(qx*qy-qz*qw),  2*(qx*qz+qy*qw)],
-        [2*(qx*qy+qz*qw),  1-2*(qx**2+qz**2),  2*(qy*qz-qx*qw)],
-        [2*(qx*qz-qy*qw),  2*(qy*qz+qx*qw),  1-2*(qx**2+qy**2)],
-    ])
-
-
-def obb_corners_world(tx, ty, tz, qw, qx, qy, qz, sx, sy, sz) -> np.ndarray:
-    """8 OBB corners in world space. sx/sy/sz are FULL dimensions."""
-    R = quat_to_rotmat(qw, qx, qy, qz)
-    center = np.array([tx, ty, tz])
-    hx, hy, hz = sx / 2.0, sy / 2.0, sz / 2.0
-    xs, ys, zs = [-hx, hx], [-hy, hy], [-hz, hz]
-    ids = [(0,0,0),(1,0,0),(1,1,0),(0,1,0),
-           (0,0,1),(1,0,1),(1,1,1),(0,1,1)]
-    corners_obj = np.array([[xs[xi], ys[yi], zs[zi]] for xi, yi, zi in ids])
-    return center + corners_obj @ R.T   # (8, 3)
-
-
-def load_trajectory(traj_csv: str):
-    df = pd.read_csv(traj_csv)
-    times_us = df["tracking_timestamp_us"].values.astype(np.int64)
-    Rs, ts = [], []
-    for _, row in df.iterrows():
-        R = quat_to_rotmat(row["qw_world_device"], row["qx_world_device"],
-                           row["qy_world_device"], row["qz_world_device"])
-        t = np.array([row["tx_world_device"], row["ty_world_device"],
-                      row["tz_world_device"]])
-        Rs.append(R); ts.append(t)
-    return times_us, Rs, ts
-
-
-def interp_pose(times_us, Rs, ts, query_ns: int):
-    query_us = query_ns // 1000
-    idx = min(max(bisect_left(times_us, query_us), 0), len(times_us) - 1)
-    return Rs[idx], ts[idx]
-
-
-def world_to_camera(pt_world, R_wd, t_wd, R_dc, t_dc):
-    p_dev = R_wd.T @ (pt_world - t_wd)
-    return R_dc.T @ (p_dev - t_dc)
-
-
-def rotate_cw90(u, v, N):
-    """Transform raw pixel (u,v) → (u',v') after 90° CW rotation of square N×N image."""
-    return N - 1 - v, u
-
-
-# ── Fisheye overlay ───────────────────────────────────────────────────────────
-
-def _project_pt(pw, R_wd, t_wd, R_dc, t_dc, cam_calib, img_N):
-    """Project world point → rotated-image pixel, or None."""
-    pc = world_to_camera(pw, R_wd, t_wd, R_dc, t_dc)
-    if pc[2] <= 0.05:
-        return None
-    uv = cam_calib.project(pc)
-    if uv is None:
-        return None
-    u_rot, v_rot = rotate_cw90(uv[0], uv[1], img_N)
-    return float(u_rot), float(v_rot)
-
-
-def draw_obb_fisheye(img, corners_world, R_wd, t_wd, R_dc, t_dc,
-                     cam_calib, color, label, n_samples=12, alpha=0.18):
-    H, W = img.shape[:2]
-    N = W  # square image
-
-    # Project all 8 corners
-    corners_px = [_project_pt(pw, R_wd, t_wd, R_dc, t_dc, cam_calib, N)
-                  for pw in corners_world]
-
-    # Filled hull (only when all 8 corners project)
-    if all(p is not None for p in corners_px):
-        pts = np.array(corners_px, dtype=np.int32)
-        if (pts[:,0].min() >= 0 and pts[:,0].max() < W and
-                pts[:,1].min() >= 0 and pts[:,1].max() < H):
-            overlay = img.copy()
-            hull = cv2.convexHull(pts)
-            cv2.fillConvexPoly(overlay, hull, color)
-            cv2.addWeighted(overlay, alpha, img, 1 - alpha, 0, img)
-
-    # Fisheye-correct edges (sample along each edge)
-    any_drawn = False
-    for i, j in BB3D_LINE_ORDERS:
-        ts_edge = np.linspace(0, 1, n_samples)
-        pts3d = [corners_world[i] + t * (corners_world[j] - corners_world[i])
-                 for t in ts_edge]
-        pts2d = [_project_pt(p, R_wd, t_wd, R_dc, t_dc, cam_calib, N)
-                 for p in pts3d]
-        for k in range(len(pts2d) - 1):
-            p0, p1 = pts2d[k], pts2d[k+1]
-            if p0 is None or p1 is None:
-                continue
-            x0, y0 = int(round(p0[0])), int(round(p0[1]))
-            x1, y1 = int(round(p1[0])), int(round(p1[1]))
-            in_slack = lambda x, y: -60 <= x < W+60 and -60 <= y < H+60
-            if not (in_slack(x0, y0) or in_slack(x1, y1)):
-                continue
-            cv2.line(img, (x0, y0), (x1, y1), color, 2, cv2.LINE_AA)
-            any_drawn = True
-
-    # Label at centroid of visible corners
-    if any_drawn:
-        valid = [p for p in corners_px if p is not None]
-        if valid:
-            cx = int(np.mean([p[0] for p in valid]))
-            cy = int(np.mean([p[1] for p in valid]))
-            cx = max(2, min(cx, W - 80))
-            cy = max(12, min(cy, H - 4))
-            font, sc, th = cv2.FONT_HERSHEY_SIMPLEX, 0.50, 1
-            (tw, tht), _ = cv2.getTextSize(label, font, sc, th)
-            cv2.rectangle(img, (cx-2, cy-tht-3), (cx+tw+2, cy+2), (20,20,20), -1)
-            cv2.putText(img, label, (cx, cy), font, sc, color, th, cv2.LINE_AA)
+from spatialcortex.config import RGB_SID
+from spatialcortex.geometry import obb_corners_world, load_trajectory, interp_pose
+from spatialcortex.drawing import get_color, draw_obb
 
 
 # ── Top-down view ─────────────────────────────────────────────────────────────
@@ -386,9 +223,9 @@ def main():
             )
             color = get_color(row["name"])
             label = f"{row['name']} {row['prob']:.2f}"
-            draw_obb_fisheye(frame, corners_w, R_wd, t_wd, R_dc, t_dc,
-                             cam_calib, color, label,
-                             n_samples=args.n_edge_samples)
+            draw_obb(frame, corners_w, R_wd, t_wd, R_dc, t_dc,
+                     cam_calib, color, label, N,
+                     n_samples=args.n_edge_samples)
             drawn += 1
 
         # Downscale fisheye panel

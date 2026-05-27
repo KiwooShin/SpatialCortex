@@ -15,80 +15,19 @@ Outputs:
 
 import argparse
 import os
-from bisect import bisect_left
 from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 import cv2
 import numpy as np
 import pandas as pd
 
 from projectaria_tools.core import data_provider, sensor_data
-from projectaria_tools.core.stream_id import StreamId
 
-RGB_SID = StreamId(214, 1)
-
-
-# ── Geometry (same as visualize_efm3d_obbs.py) ───────────────────────────────
-
-def quat_to_rotmat(qw, qx, qy, qz) -> np.ndarray:
-    n = np.sqrt(qw**2 + qx**2 + qy**2 + qz**2)
-    qw, qx, qy, qz = qw/n, qx/n, qy/n, qz/n
-    return np.array([
-        [1-2*(qy**2+qz**2),  2*(qx*qy-qz*qw),  2*(qx*qz+qy*qw)],
-        [2*(qx*qy+qz*qw),  1-2*(qx**2+qz**2),  2*(qy*qz-qx*qw)],
-        [2*(qx*qz-qy*qw),  2*(qy*qz+qx*qw),  1-2*(qx**2+qy**2)],
-    ])
-
-
-def obb_corners_world(tx, ty, tz, qw, qx, qy, qz, sx, sy, sz) -> np.ndarray:
-    R = quat_to_rotmat(qw, qx, qy, qz)
-    center = np.array([tx, ty, tz])
-    hx, hy, hz = sx / 2.0, sy / 2.0, sz / 2.0
-    xs, ys, zs = [-hx, hx], [-hy, hy], [-hz, hz]
-    ids = [(0,0,0),(1,0,0),(1,1,0),(0,1,0),
-           (0,0,1),(1,0,1),(1,1,1),(0,1,1)]
-    corners_obj = np.array([[xs[xi], ys[yi], zs[zi]] for xi, yi, zi in ids])
-    return center + corners_obj @ R.T
-
-
-def load_trajectory(traj_csv: str):
-    df = pd.read_csv(traj_csv)
-    times_us = df["tracking_timestamp_us"].values.astype(np.int64)
-    Rs, ts = [], []
-    for _, row in df.iterrows():
-        R = quat_to_rotmat(row["qw_world_device"], row["qx_world_device"],
-                           row["qy_world_device"], row["qz_world_device"])
-        t = np.array([row["tx_world_device"], row["ty_world_device"],
-                      row["tz_world_device"]])
-        Rs.append(R); ts.append(t)
-    return times_us, Rs, ts
-
-
-def interp_pose(times_us, Rs, ts, query_ns: int):
-    query_us = query_ns // 1000
-    idx = min(max(bisect_left(times_us, query_us), 0), len(times_us) - 1)
-    return Rs[idx], ts[idx]
-
-
-def world_to_camera(pt_world, R_wd, t_wd, R_dc, t_dc):
-    p_dev = R_wd.T @ (pt_world - t_wd)
-    return R_dc.T @ (p_dev - t_dc)
-
-
-def rotate_cw90(u, v, N):
-    return N - 1 - v, u
-
-
-def project_corner(pw, R_wd, t_wd, R_dc, t_dc, cam_calib, N):
-    """Project world point → CW-90-corrected image pixel, or None."""
-    pc = world_to_camera(pw, R_wd, t_wd, R_dc, t_dc)
-    if pc[2] <= 0.05:
-        return None
-    uv = cam_calib.project(pc)
-    if uv is None:
-        return None
-    u_rot, v_rot = rotate_cw90(uv[0], uv[1], N)
-    return float(u_rot), float(v_rot)
+from spatialcortex.config import RGB_SID
+from spatialcortex.geometry import obb_corners_world, load_trajectory, interp_pose, project_pt
 
 
 # ── Crop extraction ───────────────────────────────────────────────────────────
@@ -156,7 +95,7 @@ def crop_object(provider, cam_calib, R_dc, t_dc, img_N,
         snip_row['scale_x'], snip_row['scale_y'], snip_row['scale_z'],
     )
 
-    px_pts = [project_corner(c, R_wd, t_wd, R_dc, t_dc, cam_calib, img_N)
+    px_pts = [project_pt(c, R_wd, t_wd, R_dc, t_dc, cam_calib, img_N)
               for c in corners_w]
     valid = [p for p in px_pts if p is not None]
 

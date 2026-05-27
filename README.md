@@ -128,7 +128,7 @@ Converts VIO trajectory and synthesizes a point cloud from a raw Project Aria `.
 
 ```bash
 conda activate aria
-python3 scripts/vrs_to_json.py \
+python3 scripts/ingest/vrs_to_json.py \
   --vrs /path/to/recording.vrs \
   --output data/aria_vrs.json \
   --points 15000          # number of synthetic environment points
@@ -141,7 +141,7 @@ Exports all RGB frames as a compressed MP4. The web viewer syncs this video with
 
 ```bash
 conda activate aria
-python3 scripts/extract_video.py \
+python3 scripts/ingest/extract_video.py \
   --vrs /path/to/recording.vrs \
   --output data/rgb_video.mp4\
   --width 640 \
@@ -154,7 +154,7 @@ Extracts undistorted RGB frames and runs COLMAP to produce camera poses and a sp
 
 ```bash
 conda activate aria
-python scripts/run_colmap.py \
+python scripts/reconstruct/run_colmap.py \
   --vrs /path/to/recording.vrs \
   --output data/colmap \
   --every-nth 2
@@ -168,7 +168,7 @@ Each frame is fully processed before moving to the next — no intermediate file
 
 ```bash
 conda activate gsam2
-python scripts/detect_objects_3d.py \
+python scripts/reconstruct/detect_objects_3d.py \
   --colmap  data/colmap \
   --output  data/detections_3d.json \
   --vis-dir data/visualizations
@@ -181,7 +181,7 @@ Each visualization frame shows per-class coloured 3D cuboids projected onto the 
 
 To also save intermediate masks and depth maps for debugging:
 ```bash
-python scripts/detect_objects_3d.py \
+python scripts/reconstruct/detect_objects_3d.py \
   --colmap      data/colmap \
   --output      data/detections_3d.json \
   --vis-dir     data/visualizations \
@@ -196,7 +196,7 @@ Extracts a best-view RGB crop per detected object, encodes each with CLIP ViT-L/
 ```bash
 # Step A — extract best-view crops from VRS for each fused object
 conda activate efm3d
-python scripts/extract_crops.py \
+python scripts/detect/extract_crops.py \
   --scene-obbs   output/efm3d_aeo_seq01/.../scene_obbs.csv \
   --snippet-obbs output/efm3d_aeo_seq01/.../snippet_obbs.csv \
   --vrs          data/aeo/aeo_seq01_.../main.vrs \
@@ -205,7 +205,7 @@ python scripts/extract_crops.py \
   --scene-name   seq01
 
 # Step B — encode all crops and build the DB (run once for all scenes)
-python scripts/build_scene_db.py \
+python scripts/detect/build_scene_db.py \
   --crops output/efm3d_aeo_seq00/.../scene_obbs_crops.csv \
           output/efm3d_aeo_seq01/.../scene_obbs_crops.csv \
           output/efm3d_aeo_seq02/.../scene_obbs_crops.csv \
@@ -217,17 +217,17 @@ python scripts/build_scene_db.py \
 
 ```bash
 # Single query (CLIP retrieval only, fully local)
-python scripts/query_scene.py --query "where is the sofa"
+python scripts/query/query_scene.py --query "where is the sofa"
 
 # Filter to one scene
-python scripts/query_scene.py --query "find me a lamp" --scene seq02
+python scripts/query/query_scene.py --query "find me a lamp" --scene seq02
 
 # Interactive query loop
-python scripts/query_scene.py --interactive
+python scripts/query/query_scene.py --interactive
 
 # With LLaVA 1.5 7B visual confirmation (requires model download first)
-python scripts/query_scene.py --download-vlm   # one-time download (~13 GB)
-python scripts/query_scene.py --query "where is the bed" --vlm
+python scripts/query/query_scene.py --download-vlm   # one-time download (~13 GB)
+python scripts/query/query_scene.py --query "where is the bed" --vlm
 ```
 
 ### 8. Visual query — full frame + 3D bounding boxes + LLaVA
@@ -238,19 +238,19 @@ Ask a question; get back the actual video frame where the object was best seen, 
 conda activate efm3d
 
 # Single query — saves annotated frame to output/query_result.jpg
-python scripts/query_visual.py --query "where is the sofa" --vlm
+python scripts/query/query_visual.py --query "where is the sofa" --vlm
 
 # Custom output path
-python scripts/query_visual.py --query "where is the bed" --out output/query_bed.jpg --vlm
+python scripts/query/query_visual.py --query "where is the bed" --out output/query_bed.jpg --vlm
 
 # Filter to one scene
-python scripts/query_visual.py --query "find me a lamp" --scene seq02 --vlm
+python scripts/query/query_visual.py --query "find me a lamp" --scene seq02 --vlm
 
 # Interactive loop (saves query_result_000.jpg, _001.jpg, …)
-python scripts/query_visual.py --interactive --vlm
+python scripts/query/query_visual.py --interactive --vlm
 
 # Without VLM — programmatic answer only, much faster
-python scripts/query_visual.py --query "where is the chair"
+python scripts/query/query_visual.py --query "where is the chair"
 ```
 
 **Example output:**
@@ -302,17 +302,17 @@ Given a photo from your current location, re-localize within the stored map and 
 conda activate efm3d
 
 # Build the keyframe CLIP index first (one-time, ~30 s)
-python scripts/build_keyframe_index.py
+python scripts/detect/build_keyframe_index.py
 # Output: data/keyframe_index.faiss + data/keyframe_index.csv (303 keyframes)
 
 # Re-localize from an image and navigate to an object
-python scripts/navigate.py \
+python scripts/navigate/navigate.py \
     --image /path/to/query_frame.jpg \
     --find  "lamp" \
     --out   output/nav_result.jpg
 
 # Specify scene explicitly (skips re-localization)
-python scripts/navigate.py --scene seq01 --find "sofa" --out output/nav_sofa.jpg
+python scripts/navigate/navigate.py --scene seq01 --find "sofa" --out output/nav_sofa.jpg
 ```
 
 Output: fisheye frame with 3D OBBs overlaid, navigation waypoints projected on the floor, and a HUD compass arrow in the bottom-right corner showing real-time direction and distance to the target.
@@ -327,13 +327,13 @@ Render every RGB frame of a recording with live 3D OBB overlays and a HUD compas
 conda activate efm3d
 
 # Full sequence (998 frames @ 10 fps → ~100 s video)
-python scripts/render_nav_video.py \
+python scripts/navigate/render_nav_video.py \
     --scene seq01 \
     --find  "lamp" \
     --out   output/nav_video_seq01_lamp.mp4
 
 # Quick preview (every 3rd frame)
-python scripts/render_nav_video.py \
+python scripts/navigate/render_nav_video.py \
     --scene seq01 --find "sofa" \
     --stride 3 --out output/nav_preview.mp4
 ```
@@ -363,11 +363,11 @@ Streams RGB camera, SLAM cameras, VIO trajectory, and device pose into a Rerun t
 conda activate aria
 
 # Live interactive viewer
-python3 scripts/visualize_vrs.py \
+python3 scripts/viz/visualize_vrs.py \
   --vrs /path/to/recording.vrs
 
 # Save .rrd for offline replay
-python3 scripts/visualize_vrs.py \
+python3 scripts/viz/visualize_vrs.py \
   --vrs /path/to/recording.vrs \
   --rrd data/session.rrd \
   --downsample 4 \
@@ -420,19 +420,19 @@ python infer.py \
 
 # Fuse per-snippet OBBs into one consistent scene map (no pytorch3d required)
 cd ~/SpatialCortex
-conda run -n efm3d python scripts/fuse_scene_obbs.py \
+conda run -n efm3d python scripts/detect/fuse_scene_obbs.py \
   --obbs  output/efm3d_seq/.../snippet_obbs.csv \
   --prob-thresh 0.20 --dist-thresh 0.80 --min-obs 2
 
 # Render top-down scene map
-conda run -n efm3d python scripts/scene_topdown.py \
+conda run -n efm3d python scripts/viz/scene_topdown.py \
   --obbs  output/efm3d_seq/.../scene_obbs.csv \
   --traj  data/aeo/.../mps/slam/closed_loop_trajectory.csv \
   --output output/scene_topdown/seq_topdown.jpg \
   --title "My Scene"
 
 # Per-frame fisheye + top-down visualization
-conda run -n efm3d python scripts/visualize_efm3d_obbs.py \
+conda run -n efm3d python scripts/viz/visualize_efm3d_obbs.py \
   --obbs  output/efm3d_seq/.../snippet_obbs.csv \
   --vrs   data/aeo/.../main.vrs \
   --traj  data/aeo/.../mps/slam/closed_loop_trajectory.csv \
@@ -450,37 +450,40 @@ conda run -n efm3d python scripts/visualize_efm3d_obbs.py \
 
 ```
 SpatialCortex/
-├── index.html                         # Three.js interactive viewer
-├── plan.md                            # Build plan
-├── research.md                        # Related research reference
-├── scripts/
-│   ├── vrs_to_json.py                 # Aria .vrs → viewer JSON
-│   ├── visualize_vrs.py               # Rerun.io VRS dashboard
-│   ├── extract_keyframes.py           # Extract N evenly-spaced keyframes
-│   ├── extract_video.py               # RGB frames → MP4
-│   ├── run_colmap.py                  # VRS → undistorted frames + COLMAP SfM
-│   ├── visualize_colmap_points.py     # Overlay COLMAP sparse points on frames
-│   ├── detect_objects_3d.py           # Full pipeline: SAM 2 + depth + 3D cuboid viz
-│   ├── visualize_efm3d_obbs.py        # EFM3D: fisheye + top-down per-frame viz
-│   ├── fuse_scene_obbs.py             # EFM3D: fuse snippet OBBs → scene_obbs.csv
-│   ├── scene_topdown.py               # EFM3D: render single scene top-down map
-│   ├── extract_crops.py               # Query pipeline: best-view crop per object
-│   ├── build_scene_db.py              # Query pipeline: CLIP embed → SQLite + FAISS
-│   ├── query_scene.py                 # Query pipeline: NL query → 3D location (text output)
-│   ├── query_visual.py                # Visual query: NL query → annotated VRS frame + LLaVA
-│   ├── build_keyframe_index.py        # Navigation: CLIP image index of all VRS keyframes
-│   ├── navigate.py                    # Navigation: re-localize → Dijkstra path → HUD arrow image
-│   └── render_nav_video.py            # Navigation: full-sequence video with live OBBs + HUD arrow
-└── data/                              # gitignored — generated files go here
-    ├── colmap/                         # COLMAP output (images + sparse/0/)
-    ├── gaussian_output/                # 3DGS training output
-    ├── detections/                     # run_gsam2.py output (JSON + mask PNGs)
-    ├── depth/                          # estimate_depth.py output (*_depth.npy)
-    ├── detections_3d.json              # lift_to_3d.py — 3D bbox list
-    ├── visualizations/                 # lift_to_3d.py — frames with projected cuboids
-    ├── scene_db.sqlite                 # object detections + metadata  (Phase 2)
-    ├── scene.faiss                     # CLIP embedding index           (Phase 2)
-    └── splat.ply                       # 3DGS reconstruction            (Phase 2)
+├── index.html                              # Three.js interactive viewer
+├── plan.md                                 # Build plan
+├── research.md                             # Related research reference
+├── spatialcortex/                          # Shared library (imported by all scripts)
+│   ├── config.py                           #   Paths, SCENES dict, CLIP/FAISS constants
+│   ├── geometry.py                         #   OBB math, trajectory loading, fisheye projection
+│   └── drawing.py                          #   OpenCV OBB overlay, HUD compass, class colors
+└── scripts/
+    ├── ingest/
+    │   ├── vrs_to_json.py                  # Aria .vrs → viewer JSON
+    │   ├── extract_video.py                # RGB frames → MP4
+    │   └── extract_keyframes.py            # Extract N evenly-spaced keyframes
+    ├── reconstruct/
+    │   ├── run_colmap.py                   # VRS → undistorted frames + COLMAP SfM
+    │   ├── run_gsam2.py                    # Grounded-SAM 2 open-vocab 2D detection
+    │   ├── estimate_depth.py               # Depth Anything V2 metric depth
+    │   ├── lift_to_3d.py                   # Depth unproject → 3D AABBs
+    │   └── detect_objects_3d.py            # Full SAM2 + depth + 3D cuboid pipeline
+    ├── detect/
+    │   ├── fuse_scene_obbs.py              # Fuse per-snippet EFM3D OBBs → scene_obbs.csv
+    │   ├── extract_crops.py                # Best-view RGB crop per fused object
+    │   ├── build_scene_db.py               # CLIP embed crops → SQLite + FAISS
+    │   └── build_keyframe_index.py         # CLIP image index of all VRS keyframes
+    ├── query/
+    │   ├── query_scene.py                  # NL query → 3D location (text output)
+    │   └── query_visual.py                 # NL query → annotated VRS frame + LLaVA
+    ├── navigate/
+    │   ├── navigate.py                     # Re-localize → Dijkstra path → HUD arrow image
+    │   └── render_nav_video.py             # Full-sequence video with live OBBs + HUD arrow
+    └── viz/
+        ├── visualize_vrs.py                # Rerun.io VRS real-time dashboard
+        ├── visualize_colmap_points.py      # Overlay COLMAP sparse points on frames
+        ├── visualize_efm3d_obbs.py         # EFM3D: fisheye + top-down per-frame viz
+        └── scene_topdown.py                # EFM3D: render single scene top-down map
 ```
 
 ---
