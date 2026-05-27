@@ -1,0 +1,13 @@
+[tool.pytest.ini_options]
+testpaths  = ["tests"]
+addopts    = "-v --tb=short"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
+
+[tool.coverage.run]
+source = ["spatialcortex"]
+omit   = ["spatialcortex/config.py"]   # requires projectaria_tools env
+
+[tool.coverage.report]
+show_missing = true
