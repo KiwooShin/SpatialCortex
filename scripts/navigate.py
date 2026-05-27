@@ -369,8 +369,12 @@ def get_cam_calib(provider):
 # ── Rendering ─────────────────────────────────────────────────────────────────
 
 def project_path_on_frame(img, waypoints, path_idxs, R_wd, t_wd, R_dc, t_dc,
-                           cam_calib, N):
-    """Draw navigation path as dots + connecting lines on the frame."""
+                           cam_calib, N, floor_z):
+    """
+    Draw navigation path as dots + connecting lines on the frame.
+    All waypoints are snapped to floor_z so they appear on the ground plane,
+    not at eye level (trajectory records device/head height, not foot level).
+    """
     path_pts = [waypoints[i] for i in path_idxs]
     prev_px  = None
     PATH_COLOR  = (0, 200, 255)   # orange
@@ -378,8 +382,8 @@ def project_path_on_frame(img, waypoints, path_idxs, R_wd, t_wd, R_dc, t_dc,
     ARROW_COLOR = (0, 100, 255)   # red-orange for final arrow
 
     for k, wp in enumerate(path_pts):
-        # Project waypoint to image; place on ground plane (z = floor level)
-        wp_floor = wp.copy()
+        # Snap XY from trajectory, Z clamped to floor level
+        wp_floor = np.array([wp[0], wp[1], floor_z])
         px = _project_pt(wp_floor, R_wd, t_wd, R_dc, t_dc, cam_calib, N)
         if px is None:
             prev_px = None
@@ -389,9 +393,16 @@ def project_path_on_frame(img, waypoints, path_idxs, R_wd, t_wd, R_dc, t_dc,
         in_img = 0 <= xi < W and 0 <= yi < H
 
         if in_img:
-            r = 8 if k in (0, len(path_pts)-1) else 5
+            r = 10 if k in (0, len(path_pts)-1) else 6
             cv2.circle(img, (xi, yi), r, DOT_COLOR, -1, cv2.LINE_AA)
             cv2.circle(img, (xi, yi), r, (255,255,255), 1, cv2.LINE_AA)
+            # Label first and last dots
+            if k == 0:
+                cv2.putText(img, "START", (xi+12, yi+5),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255,255,255), 1, cv2.LINE_AA)
+            elif k == len(path_pts)-1:
+                cv2.putText(img, "DEST", (xi+12, yi+5),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255,255,255), 1, cv2.LINE_AA)
 
         if prev_px is not None:
             x0,y0 = int(round(prev_px[0])),int(round(prev_px[1]))
@@ -399,22 +410,107 @@ def project_path_on_frame(img, waypoints, path_idxs, R_wd, t_wd, R_dc, t_dc,
             if not ((-60<=x0<W+60 and -60<=y0<H+60) or (-60<=x1<W+60 and -60<=y1<H+60)):
                 prev_px = px; continue
             color = ARROW_COLOR if k == len(path_pts)-1 else PATH_COLOR
+            lw = 4
             if k == len(path_pts)-1:
-                cv2.arrowedLine(img,(x0,y0),(x1,y1),color,3,cv2.LINE_AA,tipLength=0.3)
+                cv2.arrowedLine(img,(x0,y0),(x1,y1),color,lw,cv2.LINE_AA,tipLength=0.25)
             else:
-                cv2.line(img,(x0,y0),(x1,y1),color,3,cv2.LINE_AA)
+                cv2.line(img,(x0,y0),(x1,y1),color,lw,cv2.LINE_AA)
 
         prev_px = px
 
-def draw_user_marker(img, user_px):
-    """Draw a camera/person icon at the user's re-localized position."""
-    if user_px is None: return
-    xi, yi = int(user_px[0]), int(user_px[1])
+def draw_direction_hud(img, R_wd, t_wd, R_dc, t_dc, target_pos, dist_m):
+    """
+    Draw a compass-style HUD in the bottom-right corner that always points
+    toward the target, regardless of whether it's in frame.
+
+    - Outer ring = compass
+    - Arrow inside = direction to target in camera space
+    - Text below = distance
+    """
     H, W = img.shape[:2]
-    if not (0 <= xi < W and 0 <= yi < H): return
-    cv2.circle(img, (xi,yi), 14, (0,255,200), -1, cv2.LINE_AA)
-    cv2.circle(img, (xi,yi), 14, (255,255,255), 2, cv2.LINE_AA)
-    cv2.putText(img, "YOU", (xi-14, yi-18),
+    cx, cy = W - 70, H - 70   # compass centre
+    r      = 48                # compass radius
+
+    # Background disc
+    overlay = img.copy()
+    cv2.circle(overlay, (cx, cy), r+4, (20, 20, 20), -1, cv2.LINE_AA)
+    cv2.addWeighted(overlay, 0.65, img, 0.35, 0, img)
+    cv2.circle(img, (cx, cy), r+4, (180, 180, 180), 1, cv2.LINE_AA)
+
+    # Compute direction from user to target in world XY
+    user_xy   = t_wd[:2]
+    target_xy = target_pos[:2]
+    delta_xy  = target_xy - user_xy
+    d_norm    = np.linalg.norm(delta_xy)
+
+    if d_norm < 0.01:
+        # Already at target — draw a check mark
+        cv2.putText(img, "HERE", (cx-20, cy+6),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0,255,100), 2, cv2.LINE_AA)
+    else:
+        # Camera forward direction in world XY (optical axis projected to ground)
+        forward_world = R_wd @ (R_dc @ np.array([0.0, 0.0, 1.0]))
+        fwd_xy  = forward_world[:2]
+        fwd_len = np.linalg.norm(fwd_xy)
+        if fwd_len > 1e-4:
+            fwd_xy /= fwd_len
+
+        # Angle between camera forward and direction to target
+        # (atan2 of cross/dot gives signed angle: positive = target is to the right)
+        dir_xy = delta_xy / d_norm
+        angle  = np.arctan2(
+            fwd_xy[0]*dir_xy[1] - fwd_xy[1]*dir_xy[0],   # cross (z-component)
+            fwd_xy[0]*dir_xy[0] + fwd_xy[1]*dir_xy[1],   # dot
+        )
+        # Flip sign: positive angle in world = right in camera image
+        angle = -angle
+
+        # Arrow tip and tail in compass image space
+        tip_x  = int(cx + (r - 10) * np.sin(angle))
+        tip_y  = int(cy - (r - 10) * np.cos(angle))
+        tail_x = int(cx - (r - 22) * np.sin(angle))
+        tail_y = int(cy + (r - 22) * np.cos(angle))
+
+        cv2.arrowedLine(img, (tail_x, tail_y), (tip_x, tip_y),
+                        (0, 200, 255), 3, cv2.LINE_AA, tipLength=0.35)
+
+        # Tick marks at N/E/S/W
+        for a in [0, np.pi/2, np.pi, 3*np.pi/2]:
+            tx_ = int(cx + r * np.sin(a))
+            ty_ = int(cy - r * np.cos(a))
+            tx2 = int(cx + (r-6) * np.sin(a))
+            ty2 = int(cy - (r-6) * np.cos(a))
+            cv2.line(img, (tx_, ty_), (tx2, ty2), (160,160,160), 1, cv2.LINE_AA)
+
+    # Distance text below compass
+    dist_str = f"{dist_m:.1f} m"
+    (tw, _), _ = cv2.getTextSize(dist_str, cv2.FONT_HERSHEY_SIMPLEX, 0.50, 1)
+    cv2.putText(img, dist_str, (cx - tw//2, cy + r + 18),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.50, (200, 200, 200), 1, cv2.LINE_AA)
+
+
+def draw_user_marker(img, R_wd, t_wd, R_dc, t_dc, cam_calib, N, floor_z):
+    """Project the user's world position (at floor level) onto the frame."""
+    # User is at the camera optical centre — project a point 0.5 m in front on the floor
+    # In camera frame, forward = +Z. Transform to world, drop to floor_z.
+    forward_cam = np.array([0.0, 0.0, 0.5])
+    p_dev = R_dc @ forward_cam + t_dc
+    p_world = R_wd @ p_dev + t_wd
+    p_world[2] = floor_z   # snap to floor
+
+    px = _project_pt(p_world, R_wd, t_wd, R_dc, t_dc, cam_calib, N)
+    H, W = img.shape[:2]
+    if px is None:
+        # Fallback: draw at image bottom-centre
+        xi, yi = W//2, int(H * 0.82)
+    else:
+        xi, yi = int(round(px[0])), int(round(px[1]))
+        if not (0 <= xi < W and 0 <= yi < H):
+            xi, yi = W//2, int(H * 0.82)
+
+    cv2.circle(img, (xi, yi), 14, (0, 255, 200), -1, cv2.LINE_AA)
+    cv2.circle(img, (xi, yi), 14, (255, 255, 255), 2, cv2.LINE_AA)
+    cv2.putText(img, "YOU", (xi-16, yi-18),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255,255,255), 2, cv2.LINE_AA)
 
 # ── Main ───────────────────────────────────────────────────────────────────────
@@ -499,21 +595,32 @@ def run(args):
         print(f"  Cross-scene: straight-line distance {total_dist:.1f} m (different rooms)")
 
     # ── Step 5: render ────────────────────────────────────────────────────────
-    # Show the frame where the target object is best seen
     print("\nRendering …", flush=True)
-    render_cfg  = SCENES[scene]   # scene = target_scene
-    frame_ts    = int(target['best_ts_ns'])
+
+    # Floor level = bottom face of target object (target_tz - half scale_z)
+    # This is the Z the nav dots must be snapped to so they appear on the ground.
+    floor_z = target['tz'] - target['scale_z'] / 2.0 - 0.05  # 5 cm below bottom face
+
+    if same_scene:
+        # Render from USER's re-localized frame — this is the natural AR view:
+        # "here is what you see now, here is where to walk"
+        render_cfg = SCENES[user_scene]
+        frame_ts   = best_loc['ts_ns']
+    else:
+        # Cross-scene: show target's best frame so user knows what to look for
+        render_cfg = SCENES[scene]
+        frame_ts   = int(target['best_ts_ns'])
 
     render_traj_tus, render_Rs, render_ts_pos = load_trajectory(str(render_cfg['traj']))
     frame, provider = load_vrs_frame(render_cfg['vrs'], frame_ts)
     cam_calib, R_dc, t_dc, N = get_cam_calib(provider)
     R_wd, t_wd = interp_pose(render_traj_tus, render_Rs, render_ts_pos, frame_ts)
 
-    # Draw context OBBs from snippet at this frame
-    snips = pd.read_csv(str(render_cfg['snips']))
-    snip_times     = snips['time_ns'].unique()
-    closest_snip   = snip_times[np.argmin(np.abs(snip_times - frame_ts))]
-    frame_snips    = snips[snips['time_ns'] == closest_snip]
+    # Draw context OBBs from snippet closest to this frame
+    snips      = pd.read_csv(str(render_cfg['snips']))
+    snip_times = snips['time_ns'].unique()
+    closest_snip = snip_times[np.argmin(np.abs(snip_times - frame_ts))]
+    frame_snips  = snips[snips['time_ns'] == closest_snip]
 
     for _, row in frame_snips.iterrows():
         corners_w = obb_corners_world(
@@ -525,23 +632,25 @@ def run(args):
         draw_obb_fisheye(frame, corners_w, R_wd, t_wd, R_dc, t_dc,
                          cam_calib, get_color(row['name']), row['name'])
 
-    # Draw target OBB (highlighted)
+    # Draw target OBB (highlighted white)
     tgt_corners = obb_corners_world(
         target['tx'], target['ty'], target['tz'],
         target['qw'], target['qx'], target['qy'], target['qz'],
         target['scale_x'], target['scale_y'], target['scale_z'],
     )
     draw_obb_fisheye(frame, tgt_corners, R_wd, t_wd, R_dc, t_dc,
-                     cam_calib, (255,255,255),
+                     cam_calib, (255, 255, 255),
                      f">>> {target['name'].upper()} <<<",
                      highlight=True)
 
-    # Draw navigation path (same scene only)
+    # Draw navigation path + YOU marker (same scene only, floor-snapped)
     if same_scene and waypoints:
-        # Re-project path using the render frame's pose (target scene)
         project_path_on_frame(frame, waypoints, path_idxs,
-                              R_wd, t_wd, R_dc, t_dc, cam_calib, N)
-        draw_user_marker(frame, (N//2, N//2))
+                              R_wd, t_wd, R_dc, t_dc, cam_calib, N, floor_z)
+        draw_user_marker(frame, R_wd, t_wd, R_dc, t_dc, cam_calib, N, floor_z)
+
+    # HUD direction arrow — always drawn (works even when target is off-screen)
+    draw_direction_hud(frame, R_wd, t_wd, R_dc, t_dc, target_pos, total_dist)
 
     # Banner
     room_note = "" if same_scene else f"  [user in {user_scene}]"
