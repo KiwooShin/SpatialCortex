@@ -99,9 +99,11 @@ SpatialCortex gives AR/VR devices (or robots) persistent spatial memory. On firs
 | **Natural language query CLI (`query_scene.py`)** | ✅ Done |
 | **3D Gaussian Splatting reconstruction** | ✅ Done (30k iter, 210 MB `.ply` + flythrough) |
 | **Visual query — full frame + 3D boxes + LLaVA (`query_visual.py`)** | ✅ Done |
-| Grounded-SAM 2 on registered frames (`run_gsam2.py`) | 🔲 In progress |
-| Depth Anything V2 + COLMAP scale calibration (`estimate_depth.py`) | 🔲 In progress |
-| Re-localization + navigation | 🔲 Planned |
+| **CLIP keyframe index for re-localization (`build_keyframe_index.py`)** | ✅ Done |
+| **Re-localization + Dijkstra navigation + HUD arrow (`navigate.py`)** | ✅ Done |
+| **Full-sequence navigation video renderer (`render_nav_video.py`)** | ✅ Done |
+| Grounded-SAM 2 on registered frames (`run_gsam2.py`) | 🔲 Planned |
+| Depth Anything V2 + COLMAP scale calibration (`estimate_depth.py`) | 🔲 Planned |
 | End-to-end demo video | 🔲 Planned |
 
 ---
@@ -292,7 +294,59 @@ Searching: "where is the sofa"
 
 ---
 
-### 8. Launch the Three.js web viewer
+### 9. Re-localization + navigation
+
+Given a photo from your current location, re-localize within the stored map and compute a navigation path to any queried object.
+
+```bash
+conda activate efm3d
+
+# Build the keyframe CLIP index first (one-time, ~30 s)
+python scripts/build_keyframe_index.py
+# Output: data/keyframe_index.faiss + data/keyframe_index.csv (303 keyframes)
+
+# Re-localize from an image and navigate to an object
+python scripts/navigate.py \
+    --image /path/to/query_frame.jpg \
+    --find  "lamp" \
+    --out   output/nav_result.jpg
+
+# Specify scene explicitly (skips re-localization)
+python scripts/navigate.py --scene seq01 --find "sofa" --out output/nav_sofa.jpg
+```
+
+Output: fisheye frame with 3D OBBs overlaid, navigation waypoints projected on the floor, and a HUD compass arrow in the bottom-right corner showing real-time direction and distance to the target.
+
+**Re-localization** uses CLIP ViT-L/14 image embeddings matched against the 303-keyframe FAISS index (cosine similarity). **Navigation** samples waypoints every 0.5 m along the SLAM trajectory and runs Dijkstra with a kNN-5 graph.
+
+### 10. Navigation video — full sequence with AR overlay
+
+Render every RGB frame of a recording with live 3D OBB overlays and a HUD compass arrow pointing toward the queried target object throughout the entire walk.
+
+```bash
+conda activate efm3d
+
+# Full sequence (998 frames @ 10 fps → ~100 s video)
+python scripts/render_nav_video.py \
+    --scene seq01 \
+    --find  "lamp" \
+    --out   output/nav_video_seq01_lamp.mp4
+
+# Quick preview (every 3rd frame)
+python scripts/render_nav_video.py \
+    --scene seq01 --find "sofa" \
+    --stride 3 --out output/nav_preview.mp4
+```
+
+Each frame shows:
+- **Coloured 3D OBBs** (per-frame, from `snippet_obbs.csv`) projected onto the fisheye image — correctly oriented for that exact frame
+- **White highlighted box** `>>> TARGET <<<` for the queried object
+- **HUD compass** (bottom-right): arrow pointing toward the target + live distance readout
+- **Banner** (top): `Scene | Target | Dist: X.X m | Frame N/total`
+
+> **Implementation note**: uses `snippet_obbs.csv` (per-frame detections) rather than `scene_obbs.csv` (fused). The fused file naively averages quaternions from observations that oscillate between two 90°-ambiguous orientations, producing a spurious mid-way orientation. Per-frame OBBs carry the correct orientation for each frame and project accurately.
+
+### 11. Launch the Three.js web viewer
 
 Interactive 3D map with sidebar query panel, object bounding boxes, and navigation path.
 
@@ -301,7 +355,7 @@ python3 -m http.server 8000
 # Open http://localhost:8000
 ```
 
-### 5. Launch the Rerun.io real-time dashboard
+### 12. Launch the Rerun.io real-time dashboard
 
 Streams RGB camera, SLAM cameras, VIO trajectory, and device pose into a Rerun timeline. Saves a `.rrd` replay file for offline demo.
 
@@ -413,7 +467,10 @@ SpatialCortex/
 │   ├── extract_crops.py               # Query pipeline: best-view crop per object
 │   ├── build_scene_db.py              # Query pipeline: CLIP embed → SQLite + FAISS
 │   ├── query_scene.py                 # Query pipeline: NL query → 3D location (text output)
-│   └── query_visual.py                # Visual query: NL query → annotated VRS frame + LLaVA
+│   ├── query_visual.py                # Visual query: NL query → annotated VRS frame + LLaVA
+│   ├── build_keyframe_index.py        # Navigation: CLIP image index of all VRS keyframes
+│   ├── navigate.py                    # Navigation: re-localize → Dijkstra path → HUD arrow image
+│   └── render_nav_video.py            # Navigation: full-sequence video with live OBBs + HUD arrow
 └── data/                              # gitignored — generated files go here
     ├── colmap/                         # COLMAP output (images + sparse/0/)
     ├── gaussian_output/                # 3DGS training output

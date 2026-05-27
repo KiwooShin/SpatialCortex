@@ -445,6 +445,26 @@ pip install torch torchvision transformers accelerate open_clip_torch faiss-gpu 
 
 ## Progress Log
 
+### 2026-05-26 (continued — navigation + video render)
+
+**Re-localization (`scripts/build_keyframe_index.py` + `scripts/navigate.py`)**
+
+- Built CLIP ViT-L/14 image embedding index of all VRS keyframes across seq00/01/02 (stride=10 → 303 keyframes). Stored in `data/keyframe_index.faiss` (303 × 768d, IndexFlatIP) + `data/keyframe_index.csv` (faiss_idx, scene, ts_ns, pose columns).
+- `navigate.py`: takes a query image (or `--scene` flag) + object name → CLIP re-localization → FAISS keyframe search → Dijkstra path on trajectory waypoints (step=0.5 m, kNN-5) → renders annotated fisheye frame with floor-projected waypoints + HUD compass arrow.
+- Key geometry: trajectory Z≈−0.05 m (eye level). Floor Z computed per target: `floor_z = target_tz − scale_z/2 − 0.05`. Each waypoint is snapped to `floor_z` before fisheye projection so dots appear on the floor, not the ceiling.
+- HUD compass (bottom-right, r=48): angle = `−arctan2(cross, dot)` between camera forward XY and target direction XY. Shows arrow + distance; "HERE" when within 0.3 m. Works for targets behind camera.
+- Cross-scene handling: for same-scene targets renders from user's re-localized frame (natural AR view); for cross-scene targets shows target frame + note.
+- Verified static navigation results: `output/nav_lamp.jpg`, `output/nav_bed.jpg`, `output/nav_sofa.jpg`.
+
+**Full-sequence navigation video (`scripts/render_nav_video.py`)**
+
+- Renders every RGB frame of a VRS sequence (up to 998 frames @ 10 fps) with: all scene OBBs projected, target highlighted white `>>> NAME <<<`, live HUD compass + distance, frame-counter banner.
+- First run used `scene_obbs.csv` for OBBs — produced tilted, misaligned boxes (especially sofa).
+- **Bug found and fixed**: `scene_obbs.csv` fuses quaternions by naive averaging across observations that alternate between two 90°-ambiguous orientations (sofa flips between 160° and 72° Z-rotation → fused average is 116° → box tilted 45° wrong). Fix: switched to `snippet_obbs.csv` (per-frame detections). For each video frame, binary-search to nearest snippet timestamp (~2 s spacing) and use those OBBs — same approach as `visualize_efm3d_obbs.py`, which was already correct.
+- After fix: sofa, picture frames, chairs all align perfectly with the image content.
+- Output: `output/nav_video_seq01_lamp_full_fixed.mp4` (998 frames @ 10 fps, ~100 s).
+- `nearest_snip(ts_ns)` helper: bisect over 49 sorted snippet timestamps → O(log N) per frame.
+
 ### 2026-05-26
 
 **3D Gaussian Splatting — training complete**
