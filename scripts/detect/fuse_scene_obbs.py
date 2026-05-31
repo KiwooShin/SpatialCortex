@@ -1,22 +1,23 @@
 """
 fuse_scene_obbs.py — aggregate per-snippet OBBs into a consistent scene map.
 
-For a STATIC scene observed from multiple views/times, each physical object
-accumulates many independent per-snippet detections.  This script:
+Two-stage pipeline:
 
-  1. Collects all OBBs across all snippet timestamps (world frame).
-  2. Clusters same-class OBBs by center proximity (greedy NMS-style grouping).
-  3. For each cluster:
-       - confidence-weighted centroid  (position)
-       - confidence-weighted mean scale (in log space)
-       - quaternion mean via eigenvector method (rotation)
-       - combined confidence = 1 - prod(1 - p_i)  (evidence accumulation)
-       - observation count stored in 'count' column
-  4. Filters clusters with fewer than --min-obs observations.
-  5. Writes scene_obbs.csv  (one row per physical object).
+  Stage 1 — per-class temporal fusion
+    * Cluster same-class OBBs across all snippets by centre distance (0.80 m).
+    * Fuse each cluster: confidence-weighted position/scale, quaternion mean,
+      accumulated evidence confidence, observation count.
 
-No pytorch3d required.  Replaces the EFM3D track_obbs() whose dependency
-(pytorch3d) is unavailable on aarch64/CUDA 13.0.
+  Stage 2 — cross-class NMS
+    * Any two fused objects of *different* classes whose centres are within
+      --cross-nms-dist (default 0.30 m) are duplicates caused by label
+      instability (e.g. the model alternately calls the same fan "pillow").
+    * Keep the cluster with the higher observation count; suppress the other.
+
+This fixes two known EFM3D failure modes:
+  - Duplicate boxes: multiple boxes for one object → Stage 1 per-class merge.
+  - Label flipping: same physical object gets two scene entries under different
+    class names → Stage 2 cross-class NMS.
 """
 
 import argparse
@@ -35,29 +36,21 @@ from spatialcortex.geometry import quat_to_rotmat
 # ── Quaternion helpers ────────────────────────────────────────────────────────
 
 def quat_mean(qs: np.ndarray, weights: np.ndarray) -> np.ndarray:
-    """
-    Markley et al. weighted quaternion mean via dominant eigenvector of
-    the weighted outer-product matrix (works for nearly-aligned quaternions).
-    qs: (N, 4)  [qw, qx, qy, qz]
-    weights: (N,)  non-negative, need not sum to 1
-    Returns: (4,) unit quaternion
-    """
-    # Ensure sign consistency (flip q if dot with first q is negative)
+    """Markley et al. weighted quaternion mean via dominant eigenvector."""
     q0 = qs[0]
-    signs = np.sign(qs @ q0)          # +1 or -1 per row
+    signs = np.sign(qs @ q0)
     signs[signs == 0] = 1.0
     qs_aligned = qs * signs[:, None]
-
     w = weights / weights.sum()
-    M = (w[:, None] * qs_aligned).T @ qs_aligned   # 4×4
-    _, vecs = np.linalg.eigh(M)                     # eigenvalues ascending
-    q_mean = vecs[:, -1]                            # dominant eigenvector
+    M = (w[:, None] * qs_aligned).T @ qs_aligned
+    _, vecs = np.linalg.eigh(M)
+    q_mean = vecs[:, -1]
     if q_mean[0] < 0:
         q_mean = -q_mean
     return q_mean / np.linalg.norm(q_mean)
 
 
-
+# ── Stage 1: per-class clustering ─────────────────────────────────────────────
 
 def center_dist(row_a, row_b) -> float:
     return np.sqrt((row_a['tx_world_object'] - row_b['tx_world_object'])**2 +
@@ -65,36 +58,12 @@ def center_dist(row_a, row_b) -> float:
                    (row_a['tz_world_object'] - row_b['tz_world_object'])**2)
 
 
-def aabb_iou_3d(row_a, row_b) -> float:
-    """Fast approximate 3D IoU using axis-aligned extents."""
-    def vol(r): return r['scale_x'] * r['scale_y'] * r['scale_z']
-    def overlap_1d(ca, sa, cb, sb):
-        return max(0.0, min(ca + sa/2, cb + sb/2) - max(ca - sa/2, cb - sb/2))
-    ix = overlap_1d(row_a['tx_world_object'], row_a['scale_x'], row_b['tx_world_object'], row_b['scale_x'])
-    iy = overlap_1d(row_a['ty_world_object'], row_a['scale_y'], row_b['ty_world_object'], row_b['scale_y'])
-    iz = overlap_1d(row_a['tz_world_object'], row_a['scale_z'], row_b['tz_world_object'], row_b['scale_z'])
-    inter = ix * iy * iz
-    if inter <= 0:
-        return 0.0
-    union = vol(row_a) + vol(row_b) - inter
-    return inter / union if union > 0 else 0.0
-
-
-# ── Clustering ────────────────────────────────────────────────────────────────
-
-def cluster_obbs(rows: pd.DataFrame, dist_thresh: float, iou_thresh: float) -> list:
-    """
-    Greedy proximity clustering of OBBs (all same class).
-    Two OBBs belong to the same cluster if:
-      center_dist < dist_thresh  AND  aabb_iou_3d >= iou_thresh
-    (if iou_thresh=0, only center distance is used)
-    Returns list of lists of original indices.
-    """
+def cluster_obbs(rows: pd.DataFrame, dist_thresh: float) -> list:
+    """Greedy proximity clustering of OBBs (same class). O(n²)."""
     n = len(rows)
     assigned = [-1] * n
     clusters = []
     recs = rows.to_dict('records')
-
     for i in range(n):
         if assigned[i] >= 0:
             continue
@@ -105,21 +74,13 @@ def cluster_obbs(rows: pd.DataFrame, dist_thresh: float, iou_thresh: float) -> l
             if assigned[j] >= 0:
                 continue
             if center_dist(recs[i], recs[j]) < dist_thresh:
-                if iou_thresh <= 0 or aabb_iou_3d(recs[i], recs[j]) >= iou_thresh:
-                    clusters[-1].append(j)
-                    assigned[j] = cl_id
+                clusters[-1].append(j)
+                assigned[j] = cl_id
     return clusters
 
 
-# ── Fusion ────────────────────────────────────────────────────────────────────
-
-def fuse_cluster(rows: pd.DataFrame) -> dict:
-    """
-    Fuse a cluster of detections of the same physical object into one OBB.
-    Position/scale: confidence-weighted mean (scale in log space).
-    Rotation: eigenvector quaternion mean.
-    Confidence: accumulated evidence  1 - prod(1 - p_i).
-    """
+def fuse_cluster(rows: pd.DataFrame, label: str) -> dict:
+    """Fuse a cluster of detections into one OBB."""
     probs = rows['prob'].values.astype(float)
     w = probs / probs.sum() if probs.sum() > 0 else np.ones(len(probs)) / len(probs)
 
@@ -127,16 +88,14 @@ def fuse_cluster(rows: pd.DataFrame) -> dict:
     ty = np.dot(w, rows['ty_world_object'].values)
     tz = np.dot(w, rows['tz_world_object'].values)
 
-    # Scale in log space avoids bias toward large detections
     log_sx = np.dot(w, np.log(rows['scale_x'].values.clip(1e-4)))
     log_sy = np.dot(w, np.log(rows['scale_y'].values.clip(1e-4)))
     log_sz = np.dot(w, np.log(rows['scale_z'].values.clip(1e-4)))
 
-    qs = rows[['qw_world_object','qx_world_object',
-               'qy_world_object','qz_world_object']].values.astype(float)
+    qs = rows[['qw_world_object', 'qx_world_object',
+               'qy_world_object', 'qz_world_object']].values.astype(float)
     qw, qx, qy, qz = quat_mean(qs, probs)
 
-    # Accumulated evidence confidence
     fused_prob = float(1.0 - np.prod(1.0 - probs.clip(0, 1)))
     fused_prob = min(fused_prob, 0.99)
 
@@ -151,7 +110,7 @@ def fuse_cluster(rows: pd.DataFrame) -> dict:
         'scale_x': float(np.exp(log_sx)),
         'scale_y': float(np.exp(log_sy)),
         'scale_z': float(np.exp(log_sz)),
-        'name': rows['name'].iloc[0],
+        'name': label,
         'instance': rows['instance'].iloc[0] if 'instance' in rows.columns else -1,
         'sem_id': rows['sem_id'].iloc[0] if 'sem_id' in rows.columns else -1,
         'prob': fused_prob,
@@ -159,18 +118,65 @@ def fuse_cluster(rows: pd.DataFrame) -> dict:
     }
 
 
+# ── Stage 2: cross-class NMS ──────────────────────────────────────────────────
+
+def cross_class_nms(scene: pd.DataFrame, dist_thresh: float) -> pd.DataFrame:
+    """
+    Suppress label-flip duplicates: two fused objects of *different* classes
+    whose centres are within dist_thresh → keep the one with more observations.
+    Returns filtered DataFrame.
+    """
+    if len(scene) == 0:
+        return scene
+
+    # Sort by count descending so the dominant label is processed first.
+    scene = scene.sort_values('count', ascending=False).reset_index(drop=True)
+    positions = scene[['tx_world_object', 'ty_world_object', 'tz_world_object']].values
+    keep = np.ones(len(scene), dtype=bool)
+
+    suppressed_pairs = []
+    for i in range(len(scene)):
+        if not keep[i]:
+            continue
+        for j in range(i + 1, len(scene)):
+            if not keep[j]:
+                continue
+            if scene.iloc[i]['name'] == scene.iloc[j]['name']:
+                continue  # same class — Stage 1 already handled this
+            dist = np.linalg.norm(positions[i] - positions[j])
+            if dist < dist_thresh:
+                suppressed_pairs.append(
+                    f"  {scene.iloc[j]['name']}(n={scene.iloc[j]['count']}) "
+                    f"← absorbed by {scene.iloc[i]['name']}(n={scene.iloc[i]['count']}) "
+                    f"d={dist:.2f}m"
+                )
+                keep[j] = False
+
+    if suppressed_pairs:
+        print(f"Stage 2 cross-class NMS: suppressed {(~keep).sum()} duplicate(s):")
+        for msg in suppressed_pairs:
+            print(msg)
+    else:
+        print("Stage 2 cross-class NMS: no cross-class duplicates found.")
+
+    return scene[keep].reset_index(drop=True)
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--obbs', required=True, help='snippet_obbs.csv')
-    ap.add_argument('--output', default=None, help='output CSV path (default: scene_obbs.csv next to input)')
+    ap.add_argument('--output', default=None,
+                    help='output CSV path (default: scene_obbs.csv next to input)')
     ap.add_argument('--prob-thresh', type=float, default=0.20,
-                    help='min per-detection confidence to include (default 0.20)')
+                    help='min per-detection confidence (default 0.20)')
     ap.add_argument('--dist-thresh', type=float, default=0.80,
-                    help='max center distance (m) to cluster two detections (default 0.80)')
-    ap.add_argument('--iou-thresh', type=float, default=0.0,
-                    help='min AABB-IoU to cluster (0 = disable, use distance only; default 0.0)')
+                    help='Stage 1 max centre distance (m) to cluster same-class '
+                         'detections (default 0.80)')
+    ap.add_argument('--cross-nms-dist', type=float, default=0.30,
+                    help='Stage 2 max centre distance (m) to suppress cross-class '
+                         'label-flip duplicates (default 0.30)')
     ap.add_argument('--min-obs', type=int, default=3,
                     help='min observations to keep a fused object (default 3)')
     args = ap.parse_args()
@@ -178,37 +184,37 @@ def main():
     if args.output is None:
         args.output = os.path.join(os.path.dirname(args.obbs), 'scene_obbs.csv')
 
-    # Load
     df = pd.read_csv(args.obbs)
-    print(f"Loaded {len(df)} raw OBBs from {len(df['time_ns'].unique())} snippets")
+    print(f"Loaded {len(df)} raw OBBs from {df['time_ns'].nunique()} timestamps")
     df = df[df['prob'] >= args.prob_thresh].copy()
     print(f"After prob≥{args.prob_thresh}: {len(df)} OBBs")
 
-    # Cluster and fuse per class
+    # ── Stage 1: per-class temporal fusion ──────────────────────────────────
+    print(f"\nStage 1: per-class clustering (dist_thresh={args.dist_thresh}m) …")
     results = []
     for name, group in df.groupby('name'):
         group = group.reset_index(drop=True)
-        clusters = cluster_obbs(group, args.dist_thresh, args.iou_thresh)
+        clusters = cluster_obbs(group, args.dist_thresh)
         for cl_indices in clusters:
             cl_rows = group.iloc[cl_indices]
-            fused = fuse_cluster(cl_rows)
-            results.append(fused)
+            results.append(fuse_cluster(cl_rows, label=name))
 
     scene = pd.DataFrame(results)
-
-    # Filter by minimum observations
-    before = len(scene)
+    before_minobs = len(scene)
     scene = scene[scene['count'] >= args.min_obs].copy()
-    print(f"Fused into {before} clusters; {len(scene)} survive min-obs≥{args.min_obs}")
+    print(f"  {before_minobs} clusters → {len(scene)} survive min-obs≥{args.min_obs}")
 
-    # Sort by confidence desc
+    # ── Stage 2: cross-class NMS ─────────────────────────────────────────────
+    print(f"\nStage 2: cross-class NMS (dist_thresh={args.cross_nms_dist}m) …")
+    scene = cross_class_nms(scene, dist_thresh=args.cross_nms_dist)
+
+    # ── Output ────────────────────────────────────────────────────────────────
     scene = scene.sort_values('prob', ascending=False).reset_index(drop=True)
-
     scene.to_csv(args.output, index=False)
-    print(f"\nScene OBBs written to {args.output}")
-    print(scene[['name','prob','count',
-                 'tx_world_object','ty_world_object','tz_world_object',
-                 'scale_x','scale_y','scale_z']].to_string(index=False))
+    print(f"\nScene OBBs written to {args.output}  ({len(scene)} objects)")
+    print(scene[['name', 'prob', 'count',
+                 'tx_world_object', 'ty_world_object', 'tz_world_object',
+                 'scale_x', 'scale_y', 'scale_z']].to_string(index=False))
 
 
 if __name__ == '__main__':

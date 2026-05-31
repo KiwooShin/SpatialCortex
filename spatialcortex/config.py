@@ -47,6 +47,13 @@ SCENES: dict[str, ScenePaths] = {
         snippet_obbs=BASE / "output/efm3d_aeo_seq02/model_release/aeo_seq02_181771578105956/snippet_obbs.csv",
         scene_obbs=BASE / "output/efm3d_aeo_seq02/model_release/aeo_seq02_181771578105956/scene_obbs.csv",
     ),
+    "seq07": ScenePaths(
+        name="seq07",
+        vrs=BASE / "data/aeo/aeo_seq07_622483472741639/main.vrs",
+        traj=BASE / "data/aeo/aeo_seq07_622483472741639/mps/slam/closed_loop_trajectory.csv",
+        snippet_obbs=BASE / "output/efm3d_aeo_seq07/model_release/aeo_seq07_622483472741639/snippet_obbs.csv",
+        scene_obbs=BASE / "output/efm3d_aeo_seq07/model_release/aeo_seq07_622483472741639/scene_obbs.csv",
+    ),
 }
 
 # ── CLIP model ────────────────────────────────────────────────────────────────

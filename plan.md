@@ -568,3 +568,99 @@ Full end-to-end: natural language → CLIP retrieval → full VRS frame with 3D 
 - Reviewed cross-frame consistency approaches: StreamPETR (temporal memory queue), OpenMask3D (multi-view CLIP fusion on 3D masks), ConceptFusion (per-point CLIP accumulation), LangSplat/LERF (language-embedded scene representations).
 - Identified DUSt3R (CVPR 2024, arXiv 2312.14132) and MASt3R (arXiv 2406.09756) as direct replacements for COLMAP that work from uncalibrated images; MASt3R adds a dense matching head on top of DUSt3R.
 - Added `research.md` with detailed summaries of all related works.
+
+---
+
+## EFM3D Detection Quality — Root Causes and Improvement Roadmap
+
+Analysis based on seq07 full-sequence inference (13,403 snippet detections, 1,601 timestamps).
+
+### Root causes identified
+
+**1. Label instability — argmax with no confidence margin**
+
+The `prob` column in `snippet_obbs.csv` is the centerness/objectness score from the heatmap, not a class probability. The class label is `torch.argmax(clas_pr, dim=1)` — a bare winner-take-all with no confidence check. A 2% softmax margin (fan=0.31 vs pillow=0.29) is enough to cause the same physical object to flip labels every few snippets as the camera angle changes. Observed: 262 "fan" + 177 "pillow" detections at the same world coordinate (within 0.02 m).
+
+**2. 3D NMS radius too small for room-scale objects**
+
+EFM3D's heatmap NMS runs at `nms_radius = splat_sigma + 1 = 3 voxels = 0.125 m`. A sofa is ~2 m long. Two detection peaks on opposite ends of the same object are both 1 m apart — both survive suppression. Our `fuse_scene_obbs.py` Stage 1 (0.8 m per-class clustering) compensates post-hoc, but multiple boxes still appear per snippet in the raw output.
+
+**3. Domain gap — trained on synthetic ASE data**
+
+EFM3D's DINOv2 backbone and classification head were trained on Aria Synthetic Environments (rendered indoor scenes). Real Aria fisheye recordings have different lighting, lens characteristics, and texture variance. This is the root cause of low per-detection confidence (~0.25–0.45) and cross-class confusion between visually similar objects.
+
+### Improvement plan (by priority)
+
+#### A. CLIP re-classification of fused objects — High impact, low effort
+
+We already have CLIP ViT-L/14 embeddings and best-view crops for every fused object (from `extract_crops.py` + `build_scene_db.py`). Replace EFM3D's class label with a zero-shot CLIP classification over the 21-label taxonomy:
+
+```python
+text_prompts = [f"a photo of a {cls}" for cls in TAXONOMY_LABELS]
+text_embeds  = clip.encode_text(text_prompts)          # (21, 768)
+image_embed  = clip.encode_image(crop)                 # (1, 768)
+clip_label   = TAXONOMY_LABELS[argmax(image_embed @ text_embeds.T)]
+```
+
+CLIP's vision-language alignment (trained on 400M image-text pairs) is far stronger than EFM3D's small classification head trained on synthetic data. This directly fixes fan/pillow and similar cross-class confusions.
+
+Add a `--reclassify` flag to `build_scene_db.py` that runs CLIP classification after embedding and overwrites the EFM3D label before writing to SQLite.
+
+#### B. Majority-vote label in Stage 1 fusion — Trivial, medium impact
+
+Currently `fuse_cluster()` uses the class label from the first detection in the cluster. Replace with:
+
+```python
+label = cluster_rows['name'].value_counts().idxmax()
+```
+
+For the fan cluster: 262 "fan" vs 177 "pillow" → majority label = "fan" correctly, before any CLIP re-classification.
+
+#### C. Save and use full class probability distribution — Medium effort
+
+EFM3D computes `ARIA_OBB_PRED_PROBS_FULL` (full softmax over 21 classes) but `ObbCsvWriter` only saves the argmax. Add top-2 class + probability columns to `snippet_obbs.csv`:
+
+```
+..., name, name2, prob_class1, prob_class2, prob
+```
+
+This enables:
+- Rejecting low-margin detections (e.g. require `prob_class1 - prob_class2 > 0.15`)
+- Soft voting during fusion: weight each class by its probability rather than by objectness
+
+Requires modifying `efm3d/utils/obb_csv_writer.py` and `fuse_scene_obbs.py`.
+
+#### D. Temporal label smoothing — Medium effort, medium impact
+
+Before spatial clustering, apply a sliding window majority vote over time for each world position: look at the same detection cluster across ±5 snippets and vote on the label. Kills transient label flips from viewpoint changes without needing CLIP re-classification.
+
+#### E. Physical constraint filtering — Low effort, small impact
+
+Post-filter detections that violate indoor physical priors:
+- Object centre must be above estimated floor level (`tz > floor_z − 0.1 m`)
+- Object must fit within the scene bounding box from the SLAM trajectory
+- Implausible scale ratios (e.g. "sofa" with `scale_x < 0.3 m`) → suppress or relabel
+
+#### F. Fine-tune on real Aria recordings — High effort, highest impact
+
+The ASE→real Aria domain gap is the deepest root cause. The AEO dataset we already have (seq00–07 with `gt_obbs.csv` and `gt_scene_obbs.csv` ground truth annotations) can be used directly to fine-tune:
+1. EFM3D's classification head only (freeze DINOv2 backbone, ~few hours)
+2. Full EFM3D end-to-end (expensive, likely 1–2 days of GPU time)
+
+Expected gain from (1) alone: eliminate most cross-class confusions while preserving spatial detection quality.
+
+#### G. Open-vocabulary classification via CLIP-embedded detection head — Long term
+
+Replace EFM3D's fixed 21-class softmax with a head that predicts a CLIP embedding vector. At inference, label = nearest CLIP text embedding. Eliminates the fixed taxonomy limitation and generalises to any object described in natural language.
+
+### Summary table
+
+| Improvement | Effort | Impact | Where to implement |
+|---|---|---|---|
+| A. CLIP re-classification | Low | ★★★ | `build_scene_db.py --reclassify` |
+| B. Majority-vote label | Trivial | ★★ | `fuse_scene_obbs.py fuse_cluster()` |
+| C. Save full class probs | Medium | ★★ | `efm3d/utils/obb_csv_writer.py` |
+| D. Temporal label smoothing | Medium | ★★ | `fuse_scene_obbs.py` pre-pass |
+| E. Physical constraint filter | Low | ★ | `fuse_scene_obbs.py` post-pass |
+| F. Fine-tune on AEO data | High | ★★★ | EFM3D training loop |
+| G. CLIP detection head | Very high | ★★★ | EFM3D model architecture |

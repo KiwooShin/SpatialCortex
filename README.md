@@ -92,9 +92,9 @@ SpatialCortex gives AR/VR devices (or robots) persistent spatial memory. On firs
 | Rerun.io VRS viewer (`visualize_vrs.py`) | ✅ Done |
 | Three.js interactive map — bounding boxes, nav path, query sidebar | ✅ Done |
 | COLMAP SfM — undistorted frames + camera poses | ✅ Done |
-| **EFM3D inference on AEO seq00/01/02** | ✅ Done |
+| **EFM3D inference on AEO seq00–07 (full sequences)** | ✅ Done |
 | **Per-snippet OBB visualization (fisheye + top-down, `visualize_efm3d_obbs.py`)** | ✅ Done |
-| **Scene-level OBB fusion (`fuse_scene_obbs.py`)** | ✅ Done |
+| **Two-stage scene OBB fusion: temporal + cross-class NMS (`fuse_scene_obbs.py`)** | ✅ Done |
 | **Scene top-down map (`scene_topdown.py`)** | ✅ Done |
 | **Best-view crop extraction per object (`extract_crops.py`)** | ✅ Done |
 | **CLIP ViT-L/14 embedding + FAISS index (`build_scene_db.py`)** | ✅ Done |
@@ -104,9 +104,10 @@ SpatialCortex gives AR/VR devices (or robots) persistent spatial memory. On firs
 | **CLIP keyframe index for re-localization (`build_keyframe_index.py`)** | ✅ Done |
 | **Re-localization + Dijkstra navigation + HUD arrow (`navigate.py`)** | ✅ Done |
 | **Full-sequence navigation video renderer (`render_nav_video.py`)** | ✅ Done |
+| **End-to-end interactive query demo video** | ✅ Done |
 | Grounded-SAM 2 on registered frames (`run_gsam2.py`) | 🔲 Planned |
 | Depth Anything V2 + COLMAP scale calibration (`estimate_depth.py`) | 🔲 Planned |
-| End-to-end demo video | 🔲 Planned |
+| CLIP re-classification of EFM3D detections (see `plan.md`) | 🔲 Planned |
 
 ---
 
@@ -444,7 +445,8 @@ conda run -n efm3d python scripts/viz/visualize_efm3d_obbs.py \
 **Key implementation notes:**
 - Aria RGB sensor image is 90° CCW from upright — the visualizer applies a CW 90° rotation to both the image array and all projected pixel coordinates.
 - `scale_x/y/z` in `snippet_obbs.csv` are **full** dimensions; half-extents = scale/2.
-- EFM3D's built-in `track_obbs()` requires pytorch3d (unavailable on aarch64/CUDA 13). `fuse_scene_obbs.py` is a drop-in replacement: greedy proximity clustering + confidence-weighted position/log-scale averaging + Markley quaternion mean + accumulated evidence confidence.
+- EFM3D's built-in `track_obbs()` requires pytorch3d (unavailable on aarch64/CUDA 13). `fuse_scene_obbs.py` is a drop-in replacement using a **two-stage pipeline**: (1) per-class temporal clustering with confidence-weighted position/log-scale averaging + Markley quaternion mean; (2) cross-class NMS that suppresses label-flip duplicates — objects the model alternately classifies as two different labels (e.g. fan vs pillow) — keeping the cluster with more observations.
+- Pass `--scene-mode` to `visualize_efm3d_obbs.py` to broadcast the stable fused scene map to every VRS frame (with frustum culling) rather than showing noisy per-snippet detections.
 
 ---
 
@@ -463,7 +465,8 @@ SpatialCortex/
     ├── ingest/
     │   ├── vrs_to_json.py                  # Aria .vrs → viewer JSON
     │   ├── extract_video.py                # RGB frames → MP4
-    │   └── extract_keyframes.py            # Extract N evenly-spaced keyframes
+    │   ├── extract_keyframes.py            # Extract N evenly-spaced keyframes
+    │   └── download_run_efm3d.py           # Download AEO sequences + run full EFM3D pipeline
     ├── reconstruct/
     │   ├── run_colmap.py                   # VRS → undistorted frames + COLMAP SfM
     │   ├── run_gsam2.py                    # Grounded-SAM 2 open-vocab 2D detection
@@ -484,8 +487,9 @@ SpatialCortex/
     └── viz/
         ├── visualize_vrs.py                # Rerun.io VRS real-time dashboard
         ├── visualize_colmap_points.py      # Overlay COLMAP sparse points on frames
-        ├── visualize_efm3d_obbs.py         # EFM3D: fisheye + top-down per-frame viz
-        └── scene_topdown.py                # EFM3D: render single scene top-down map
+        ├── visualize_efm3d_obbs.py         # EFM3D: fisheye + top-down viz (snippet or scene mode)
+        ├── scene_topdown.py                # EFM3D: render single scene top-down map
+        └── render_demo_video.py            # Scripted interactive-query demo video renderer
 ```
 
 ---

@@ -118,7 +118,6 @@ def create_topdown(frame_obbs, cam_pos, R_wd, R_dc,
                         cv2.LINE_AA, tipLength=0.25)
 
     # ── Decorations ───────────────────────────────────────────────────────────
-    # Scale bar (1 m)
     bar_px = int(scale)
     bx, by = 16, view_size - 22
     cv2.line(img, (bx, by), (bx + bar_px, by), (180, 180, 180), 2)
@@ -145,10 +144,15 @@ def create_topdown(frame_obbs, cam_pos, R_wd, R_dc,
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--obbs", required=True)
+    ap.add_argument("--obbs", required=True,
+                    help="snippet_obbs.csv (per-timestamp) or scene_obbs.csv "
+                         "(stable, broadcast to every frame with --scene-mode)")
     ap.add_argument("--vrs", required=True)
     ap.add_argument("--traj", required=True)
     ap.add_argument("--output-dir", required=True)
+    ap.add_argument("--scene-mode", action="store_true",
+                    help="Treat --obbs as scene-level (no time_ns): show the same "
+                         "stable fused objects at every VRS frame.")
     ap.add_argument("--prob-thresh", type=float, default=0.2)
     ap.add_argument("--scale", type=float, default=0.5,
                     help="Output image scale for fisheye panel (default 0.5)")
@@ -162,16 +166,12 @@ def main():
     # Load OBBs
     obbs = pd.read_csv(args.obbs)
     obbs = obbs[obbs["prob"] >= args.prob_thresh].copy()
-    timestamps = sorted(obbs["time_ns"].unique())
-    print(f"Loaded {len(obbs)} OBBs at {len(timestamps)} timestamps "
-          f"(thresh={args.prob_thresh})")
 
     # Load trajectory
     times_us, Rs_wd, ts_wd = load_trajectory(args.traj)
     print(f"Loaded {len(times_us)} trajectory poses")
 
     # Build device world positions for trajectory overlay in top-down view
-    # Sample every 50th pose to keep the list small
     traj_xy = [(ts_wd[i][0], ts_wd[i][1]) for i in range(0, len(ts_wd), 50)]
 
     # Open VRS + calibration
@@ -180,28 +180,39 @@ def main():
     cam_calib = dev_calib.get_camera_calib("camera-rgb")
 
     T_dc = cam_calib.get_transform_device_camera()
-    R_dc = T_dc.rotation().to_matrix()   # R_device_camera
+    R_dc = T_dc.rotation().to_matrix()
     t_dc = T_dc.translation().flatten()
 
     img_w, img_h = cam_calib.get_image_size()
-    N = int(img_w)   # square: 1408
+    N = int(img_w)
     print(f"RGB image size: {N}×{int(img_h)}, applying CW-90° rotation")
 
-    # Target fisheye panel size after downscale
     panel_size = int(N * args.scale)
-    topdown_size = panel_size   # square top-down view, same height as fisheye
+    topdown_size = panel_size
 
-    for i, ts_ns in enumerate(timestamps):
+    if args.scene_mode:
+        print(f"Scene mode: {len(obbs)} fused objects → broadcast to all frames")
+        t_start, t_end = times_us[0], times_us[-1]
+        step_us = 100_000  # 100 ms = 10 Hz
+        timestamps_us = list(range(int(t_start), int(t_end), step_us))
+        timestamps_ns = [t * 1000 for t in timestamps_us]
+        scene_obbs = obbs
+        print(f"Rendering {len(timestamps_ns)} frames at ~10 Hz")
+    else:
+        timestamps_ns = sorted(obbs["time_ns"].unique())
+        scene_obbs = None
+        print(f"Snippet mode: {len(obbs)} OBBs at {len(timestamps_ns)} timestamps "
+              f"(thresh={args.prob_thresh})")
+
+    for i, ts_ns in enumerate(timestamps_ns):
         img_data, _ = provider.get_image_data_by_time_ns(
             RGB_SID, int(ts_ns),
             sensor_data.TimeDomain.DEVICE_TIME,
             sensor_data.TimeQueryOptions.CLOSEST,
         )
         if not img_data.is_valid():
-            print(f"  skip ts={ts_ns}: no image")
             continue
 
-        # Raw frame (1408×1408); rotate CW 90° to correct sensor orientation
         frame_raw = img_data.to_numpy_array().copy()
         if frame_raw.ndim == 2:
             frame_raw = cv2.cvtColor(frame_raw, cv2.COLOR_GRAY2BGR)
@@ -211,7 +222,22 @@ def main():
 
         R_wd, t_wd = interp_pose(times_us, Rs_wd, ts_wd, int(ts_ns))
 
-        frame_obbs = obbs[obbs["time_ns"] == ts_ns]
+        raw_obbs = scene_obbs if args.scene_mode else obbs[obbs["time_ns"] == ts_ns]
+
+        # Frustum cull in scene mode: within topdown_radius AND forward hemisphere.
+        if args.scene_mode:
+            optical_w = R_wd @ (R_dc @ np.array([0.0, 0.0, 1.0]))
+            centres = raw_obbs[['tx_world_object',
+                                'ty_world_object',
+                                'tz_world_object']].values
+            to_obj = centres - t_wd[None, :]
+            dist   = np.linalg.norm(to_obj, axis=1)
+            dot    = (to_obj / (dist[:, None] + 1e-6)) @ optical_w
+            mask   = (dist < args.topdown_radius) & (dot > -0.2)
+            frame_obbs = raw_obbs[mask]
+        else:
+            frame_obbs = raw_obbs
+
         drawn = 0
         for _, row in frame_obbs.iterrows():
             corners_w = obb_corners_world(
@@ -228,12 +254,10 @@ def main():
                      n_samples=args.n_edge_samples)
             drawn += 1
 
-        # Downscale fisheye panel
         if args.scale != 1.0:
             frame = cv2.resize(frame, (panel_size, panel_size),
                                interpolation=cv2.INTER_AREA)
 
-        # Top-down panel
         topdown = create_topdown(
             frame_obbs, t_wd, R_wd, R_dc,
             all_cam_positions=traj_xy,
@@ -241,15 +265,13 @@ def main():
             radius_m=args.topdown_radius,
         )
 
-        # Combine side-by-side
         combined = np.concatenate([frame, topdown], axis=1)
-
         out_path = os.path.join(args.output_dir, f"frame_{i:04d}_{ts_ns}.jpg")
-        cv2.imwrite(out_path, combined,
-                    [cv2.IMWRITE_JPEG_QUALITY, 92])
-        print(f"  [{i+1}/{len(timestamps)}] ts={ts_ns}  drawn={drawn}  → {out_path}")
+        cv2.imwrite(out_path, combined, [cv2.IMWRITE_JPEG_QUALITY, 92])
+        if i % 100 == 0 or i < 5:
+            print(f"  [{i+1}/{len(timestamps_ns)}] ts={ts_ns}  drawn={drawn}")
 
-    print(f"\nDone. {len(timestamps)} combined frames saved to {args.output_dir}")
+    print(f"\nDone. {len(timestamps_ns)} frames saved to {args.output_dir}")
 
 
 if __name__ == "__main__":
