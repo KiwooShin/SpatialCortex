@@ -4,7 +4,7 @@
 
 > Built on 3D Gaussian Splatting · EFM3D · CLIP ViT-L/14 · LLaVA 1.5 7B · Three.js · Rerun.io
 
-<video src="assets/demo.mp4" autoplay loop muted playsinline width="700"></video>
+![SpatialCortex demo](assets/demo.gif)
 
 ---
 
